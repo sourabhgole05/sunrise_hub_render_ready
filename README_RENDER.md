@@ -49,8 +49,9 @@ books, Yahoo Finance market quotes, RSS parsing, and a FastAPI compatibility
 app. The normal Render start command remains `python iptv_dashboard.py`.
 To run the compatibility API directly, use `uvicorn iptv_dashboard:fastapi_app`.
 
-HLS transcoding also requires the system `ffmpeg` executable in `PATH`;
-`ffmpeg-python` is only the Python command builder. If FFmpeg is unavailable,
+HLS transcoding requires the system `ffmpeg` executable in `PATH`;
+`ffmpeg-python` is only the Python command builder. The repository includes
+`apt.txt` so Render installs FFmpeg during deployment. If FFmpeg is unavailable,
 the existing direct browser/VLC playback remains available and the HLS route
 returns an explicit error instead of silently failing.
 
