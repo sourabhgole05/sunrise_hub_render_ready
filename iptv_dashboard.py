@@ -14,7 +14,7 @@ import xml.etree.ElementTree as ET
 from email.utils import parsedate_to_datetime
 from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor
-from urllib.parse import urlparse, parse_qs, quote
+from urllib.parse import urlparse, parse_qs, quote, urlencode
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 VERSION   = "11.0"
@@ -449,25 +449,63 @@ def yf_chart(sym, range_="1d", interval="5m"):
             meta = res.get("meta") or {}
             q = ((res.get("indicators") or {}).get("quote") or [{}])[0]
             cl = [c for c in (q.get("close") or []) if c is not None]  # QA fix #4
+            latest = (res.get("indicators") or {}).get("quote", [{}])[0]
+            candles = [{"t": t, "o": o, "h": h, "l": lo, "c": close}
+                       for t, o, h, lo, close in zip(
+                           res.get("timestamp") or [],
+                           latest.get("open") or [],
+                           latest.get("high") or [],
+                           latest.get("low") or [],
+                           latest.get("close") or [])
+                       if None not in (t, o, h, lo, close)][-400:]
+            last_candle = candles[-1] if candles else {}
             return {"sym": sym,
                     "name": meta.get("shortName") or meta.get("longName") or sym,
                     "price": meta.get("regularMarketPrice"),
                     "prev": meta.get("previousClose")
                             or meta.get("chartPreviousClose"),
+                    "open": meta.get("regularMarketOpen") or last_candle.get("o"),
+                    "high": meta.get("regularMarketDayHigh") or last_candle.get("h"),
+                    "low": meta.get("regularMarketDayLow") or last_candle.get("l"),
+                    "close": last_candle.get("c") or meta.get("regularMarketPrice"),
                     "cur": meta.get("currency") or "",
                     "exchangeName": meta.get("exchangeName") or
                                     meta.get("fullExchangeName") or "",
                     "state": meta.get("marketState") or "",
                     "ts": (res.get("timestamp") or [])[-400:],
-                    "cl": cl[-400:]}
+                    "cl": cl[-400:],
+                    "candles": candles}
         except Exception as e:
             last = e
     raise RuntimeError("yahoo failed %s (%s)" % (sym, last))
 
+def yf_fundamentals(sym):
+    url = ("https://query1.finance.yahoo.com/v10/finance/quoteSummary/%s"
+           "?modules=price,summaryDetail,defaultKeyStatistics,assetProfile"
+           % quote(sym, safe=""))
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    with urllib.request.urlopen(req, timeout=8) as r:
+        data = json.loads(r.read().decode("utf-8", errors="replace"))
+    result = ((data.get("quoteSummary") or {}).get("result") or [{}])[0]
+    price = result.get("price") or {}
+    detail = result.get("summaryDetail") or {}
+    stats = result.get("defaultKeyStatistics") or {}
+    profile = result.get("assetProfile") or {}
+    def raw(obj, key):
+        value = obj.get(key)
+        return value.get("raw") if isinstance(value, dict) else value
+    return {"sym": sym, "name": raw(price, "longName") or raw(price, "shortName") or sym,
+            "pe": raw(detail, "trailingPE") or raw(stats, "trailingEps"),
+            "forwardPe": raw(stats, "forwardPE"),
+            "marketCap": raw(price, "marketCap"),
+            "eps": raw(stats, "trailingEps"),
+            "dividendYield": raw(detail, "dividendYield"),
+            "sector": profile.get("sector") or "",
+            "industry": profile.get("industry") or ""}
+
 # ---------------- BOOKS (Project Gutenberg via Gutendex) ----------------
 def gutendex(params):
-    q = "&".join("%s=%s" % (k, quote(str(v), safe=""))
-                 for k, v in params.items())
+    q = urlencode(params, doseq=True)
     req = urllib.request.Request("https://gutendex.com/books?" + q,
                                  headers={"User-Agent": "Mozilla/5.0"})
     with urllib.request.urlopen(req, timeout=12) as r:
@@ -613,6 +651,9 @@ h1{font-size:19px;font-weight:800;background:linear-gradient(90deg,var(--acc),
 .tabs button.radio.active{background:linear-gradient(90deg,#38bdf8,#0284c7)}
 .hdrbtn{border:0;background:none;color:var(--mut);cursor:pointer;font-size:17px;
  padding:2px 5px}.hdrbtn:hover{color:var(--acc)}.hdrbtn:disabled{opacity:.3}
+.cachebtn{border:1px solid var(--line);border-radius:9px;background:var(--chip);
+ color:var(--mut);cursor:pointer;padding:6px 9px;font-size:12px;font-weight:700}
+.cachebtn:hover{color:var(--acc);border-color:var(--acc)}
 .row2{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
 #q{flex:1;min-width:160px;padding:8px 13px;border-radius:10px;font-size:14px;
  border:1px solid var(--line);background:var(--card);color:var(--txt)}
@@ -907,6 +948,7 @@ body[data-mode=podcasts] #panel-podcasts{display:block}
   <button class="hdrbtn" id="themebtn" title="Theme">&#9788;</button>
   <button class="hdrbtn" id="help" title="Help / checks">&#10067;</button>
   <button class="hdrbtn" id="more" title="More">&#8943;</button>
+  <button class="cachebtn" id="cachetop" title="Clear cached data">&#8635; Cache</button>
   <button class="hdrbtn" id="quit" title="Stop server">&#x23FB;</button></div>
  <div class="row2">
   <input id="q" placeholder="&#128269; Search channels or stations&hellip;"
@@ -952,7 +994,9 @@ body[data-mode=podcasts] #panel-podcasts{display:block}
 </div>
 <div class="panel" id="panel-podcasts">
  <h3>Latest stories and podcasts</h3>
- <p class="note">Listen to current episodes from public RSS feeds.</p>
+ <p class="note">Listen to current episodes from public RSS feeds. Audio stays available while you browse.</p>
+ <div class="pbar2"><input id="podq" placeholder="Filter stories or shows…" autocomplete="off">
+  <button class="big blue" id="podrefresh">Refresh</button></div>
  <div id="podlist" class="podlist"><div class="pempty">Loading podcasts...</div></div>
 </div>
 
@@ -1067,7 +1111,7 @@ body[data-mode=podcasts] #panel-podcasts{display:block}
  <h3 id="chartsym"></h3>
  <div id="chartpills" class="pchips"></div>
  <div class="charttools"><button class="mini active" data-ct="line">Line</button>
-  <button class="mini" data-ct="bar">Bars</button></div>
+  <button class="mini" data-ct="candle">Candles</button><button class="mini" data-ct="bar">Bars</button></div>
  <div class="chartbox" id="bigchart"></div>
  <div id="chkstats" class="chkstats"></div>
 </div></div>
@@ -1176,8 +1220,11 @@ function pbShow(it){
  document.body.classList.add('playing');PB.on=true}
 function radioStop(msg){
  AU.pause();try{AU.removeAttribute('src');AU.load()}catch(e){}
+ AU.onplaying=AU.onpause=AU.onended=AU.onerror=null;
  clearInterval(PB.wd);clearTimeout(PB.timer);clearInterval(PB.bt);
- document.body.classList.remove('playing');PB.on=false;PB.cur=null;
+ document.body.classList.remove('playing');PB.on=false;PB.cur=null;PB.tries=0;
+ $('pbplay').innerHTML='\\u25B6';$('pbstate').textContent='Stopped';
+ $('pbslp').value='0';
  if(msg)toast(msg,'bad')}
 function radioConnect(it){
  PB.cur=it;PB.fired=false;pbShow(it);
@@ -1434,6 +1481,12 @@ function openVlcMobile(){
  if(link){window.location.href=link;
   $('playerhint').textContent='If VLC is installed, your phone will open it. Otherwise use Play here.';
   return}
+ if(!IS_CLOUD){
+  fetch('/play?url='+encodeURIComponent(PLAYER.url)).then(function(r){return r.json()})
+   .then(function(j){toast(j.msg,j.ok?'ok':'bad')})
+   .catch(function(){toast('Could not reach the local player','bad')});
+  return;
+ }
  $('playerhint').textContent='Your phone cannot launch VLC from this browser. Use Play here.';
 }
 function openPlayer(it,u){
@@ -1442,7 +1495,7 @@ function openPlayer(it,u){
  $('playerhint').textContent=/Android|iPhone|iPad|iPod/i.test(navigator.userAgent)
   ?'VLC can be opened when installed; otherwise play in this browser.'
   :'Choose a playback option.';
- $('playervlc').style.display=vlcLink(u)?'':'none';
+ $('playervlc').style.display=(vlcLink(u)||!IS_CLOUD)?'':'none';
  $('playerplay').style.display=/^https?:/i.test(u)?'':'none';
  $('playerexternal').style.display=/^https?:/i.test(u)?'':'none';
  showModal('playermodal',true);
@@ -1466,17 +1519,12 @@ $('playerexternal').onclick=function(){
 function route(it,u){
  var tp=it.tp||plTypeOf(S.pl)||'tv';
  if(tp==='radio'){radioPlay(it);return}
- if(ISMOBILE){
-  pushHist(it,'tv');openPlayer(it,u);return}
- if(IS_CLOUD){
-  if(/^https?:/i.test(u)){toast('Opening stream...');pushHist(it,'tv');window.open(u,'_blank','noopener');}
-  else toast('This stream requires VLC on a local PC','bad');
-  return}
+ if(/^https?:/i.test(u)){pushHist(it,'tv');openPlayer(it,u);return}
+ if(IS_CLOUD){toast('This stream requires VLC or a compatible player','bad');return}
  toast('Opening '+plain(esc(it.n)).slice(0,40)+'...');
  fetch('/play?url='+encodeURIComponent(u)).then(function(r){return r.json()})
- .then(function(j){toast(j.msg,j.ok?'ok':'bad');
-  if(j.ok)pushHist(it,'tv')})
- .catch(function(){toast('Server not running','bad')})}
+  .then(function(j){toast(j.msg,j.ok?'ok':'bad')})
+  .catch(function(){toast('Server not running','bad')})}
 function toggleFav(u){var i=-1;
  for(var k=0;k<S.favs.length;k++)if(S.favs[k].u===u){i=k;break}
  if(i>=0){S.favs.splice(i,1);toast('Removed from favorites')}
@@ -1493,14 +1541,13 @@ function toggleFav(u){var i=-1;
 window.clearHist=function(){S.hist=[];lsSet('iptv-hist',S.hist);
  buildTabs();buildChips();render(true);toast('History cleared')};
 window.clearCache=function(){
- try { localStorage.removeItem('iptv-favs'); localStorage.removeItem('iptv-hist');
-       localStorage.removeItem('iptv-chk'); localStorage.removeItem('iptv-vol');
-       localStorage.removeItem('iptv-theme'); localStorage.removeItem('iptv-welcomed'); }
+ try { localStorage.removeItem('iptv-chk'); }
  catch(e){}
- S.favs=[];S.hist=[];S.chk={};S.cache={};
- if(PB&&PB.cur){radioStop('Cache cleared')} else {try{AU.pause();AU.src='';AU.load()}catch(e){} }
- buildTabs();buildChips();render(true);toast('All caches cleared','ok');
- setTimeout(function(){location.reload()},500);
+ S.chk={};S.cache={};
+ fetch('/api/cache?scope=data').catch(function(){});
+ if(PB&&PB.cur)radioStop();
+ buildTabs();buildChips();render(true);toast('Cached data cleared','ok');
+ setTimeout(function(){location.reload()},350);
 };
 window.wbDone=function(){lsSet('iptv-welcomed',1);showModal('welcome',false)};
 window.addCustom=function(){
@@ -1624,8 +1671,14 @@ function podShow(){
  $('podlist').innerHTML='<div class="pempty">Loading podcasts...</div>';
  fetch('/api/podcasts').then(function(r){return r.json()})
   .then(function(j){
-   POD.loaded=true;var h='',items=j.items||[];
+   POD.loaded=true;POD.items=j.items||[];podPaint();
+   })
+   .catch(function(){$('podlist').innerHTML=
+   '<div class="pempty">Could not load podcasts. <button class="big" onclick="podShow()">Retry</button></div>'})}
+ function podPaint(){
+   var h='',q=($('podq').value||'').toLowerCase(),items=POD.items||[];
    for(var i=0;i<items.length;i++){var a=items[i];
+    if(q&&(a.t+' '+a.s+' '+(a.b||'')).toLowerCase().indexOf(q)<0)continue;
     h+='<article class="podcard">'+(a.d?'<img src="'+esc(a.d)+
      '" loading="lazy" onerror="this.remove()">':'')+
      '<div class="podtext"><b>'+esc(a.t)+'</b><div class="nimeta">'+
@@ -1634,9 +1687,9 @@ function podShow(){
      (a.audio?'<audio controls preload="none" src="'+esc(a.audio)+'"></audio>':'')+
      (a.l?'<a class="big blue" target="_blank" rel="noopener" href="'+
       esc(a.l)+'">Open</a>':'')+'</article>'}
-   $('podlist').innerHTML=h||'<div class="pempty">No podcast episodes available.</div>'})
-  .catch(function(){$('podlist').innerHTML=
-   '<div class="pempty">Could not load podcasts. Try again later.</div>'})}
+   $('podlist').innerHTML=h||'<div class="pempty">No matching episodes.</div>'}
+ $('podq').addEventListener('input',podPaint);
+ $('podrefresh').onclick=function(){POD.loaded=false;podShow()};
 
 /* ================= MARKETS PANEL ================= */
 var MKT={timer:null,rows:null,watch:[]};
@@ -1669,6 +1722,17 @@ function sparkV(vals,w,h){
    (h-3-((vals[i]-mn)/rng)*(h-6)).toFixed(1))}
  return'<svg width="'+w+'" height="'+h+'"><polyline fill="none" stroke="'+
   col+'" stroke-width="2" points="'+pts.join(' ')+'"/></svg>'}
+ function candleV(rows,w,h){
+ if(!rows||rows.length<2)return'';
+ rows=rows.slice(-80);var lo=Math.min.apply(null,rows.map(function(x){return x.l})),
+  hi=Math.max.apply(null,rows.map(function(x){return x.h})),rng=(hi-lo)||1,step=w/rows.length;
+ var s='<svg width="'+w+'" height="'+h+'" role="img" aria-label="candlestick chart">';
+ rows.forEach(function(x,i){var up=x.c>=x.o,col=up?'#16a34a':'#dc2626',
+   y=function(v){return h-4-((v-lo)/rng)*(h-8)},x0=i*step+step/2,
+   top=y(Math.max(x.o,x.c)),bot=y(Math.min(x.o,x.c));
+  s+='<line x1="'+x0.toFixed(1)+'" y1="'+y(x.h).toFixed(1)+'" x2="'+x0.toFixed(1)+'" y2="'+y(x.l).toFixed(1)+'" stroke="'+col+'"/>'+
+   '<rect x="'+(i*step+1).toFixed(1)+'" y="'+top.toFixed(1)+'" width="'+Math.max(2,step-2).toFixed(1)+'" height="'+Math.max(1,bot-top).toFixed(1)+'" fill="'+col+'"/>'});
+ return s+'</svg>'}
 function barV(vals,w,h){
  if(!vals||vals.length<2)return'';
  var mn=Math.min.apply(null,vals),mx=Math.max.apply(null,vals),rng=(mx-mn)||1;
@@ -1687,7 +1751,9 @@ function mkRow(q,label,canRm){
   '</span>'+(canRm?'<button class="rm" data-sym="'+esc(q.sym)+
   '" title="Remove">\\u2715</button>':'')+'</div>'+
   '<div class="mknum"><span class="mkp">'+money(q.price,q.cur)+'</span>'+
-  chgHtml(q.price,q.prev)+'</div>'+
+  chgHtml(q.price,q.prev)+'<small>O '+money(q.open,q.cur)+
+  ' H '+money(q.high,q.cur)+' L '+money(q.low,q.cur)+
+  ' C '+money(q.close,q.cur)+'</small></div>'+
   '<div class="mksk">'+sparkV(q.cl40,120,36)+'</div></div>'}
 function mkPaint(){
  if(!MKT.rows)$('mkwrap').innerHTML=
@@ -1788,14 +1854,26 @@ function loadChart(){
   var cl=j.cl||[];
   if(cl.length<2){$('bigchart').innerHTML=
    '<div class="pempty">No chart data</div>';return}
-  $('bigchart').innerHTML=CS.type==='bar'?barV(cl,560,220):sparkV(cl,560,220);
+  $('bigchart').innerHTML=CS.type==='bar'?barV(cl,560,220):
+   (CS.type==='candle'?candleV(j.candles,560,220):sparkV(cl,560,220));
   var lo=Math.min.apply(null,cl),hi=Math.max.apply(null,cl);
   $('chkstats').innerHTML='<b>'+money(j.price,j.cur)+'</b>'+
    chgHtml(j.price,j.prev)+'<span>low '+money(lo,j.cur)+'</span>'+
    '<span>high '+money(hi,j.cur)+'</span>'+
-   (j.state?'<span>'+esc(j.state)+'</span>':'')+
-   (j.name?'<span>'+esc(j.name)+'</span>':'')+
-   (j.exchangeName?'<span>'+esc(j.exchangeName)+'</span>':'')})
+  '<span>open '+money(j.open,j.cur)+'</span><span>close '+
+  money(j.close,j.cur)+'</span>'+
+  (j.state?'<span>'+esc(j.state)+'</span>':'')+
+  (j.name?'<span>'+esc(j.name)+'</span>':'')+
+  (j.exchangeName?'<span>'+esc(j.exchangeName)+'</span>':'');
+  fetch('/api/fundamentals?sym='+encodeURIComponent(CS.sym))
+   .then(function(r){return r.json()}).then(function(f){
+    if(f.error)return;
+    $('chkstats').innerHTML+='<span>PE '+(f.pe==null?'-':f.pe.toFixed?
+     f.pe.toFixed(2):f.pe)+'</span><span>mcap '+money(f.marketCap,j.cur)+
+     '</span><span>'+esc(f.sector||'')+'</span><span>'+
+     esc(f.industry||'')+'</span>';
+   }).catch(function(){});
+  })
  .catch(function(){$('bigchart').innerHTML=
   '<div class="pempty">Failed to load</div>'})}
 
@@ -2019,6 +2097,7 @@ $('okfirst').addEventListener('change',function(){render(true)});
 $('mob').onclick=function(){showModal('mobpanel',true)};
 $('set').onclick=function(){showModal('setpanel',true)};
 $('cacheclear').onclick=window.clearCache;
+$('cachetop').onclick=function(){if(confirm('Clear downloaded data and stream checks?'))clearCache()};
 $('guide').onclick=openGuide;
 $('more').onclick=function(){showModal('utilitypanel',true)};
 $('moreguide').onclick=function(){showModal('utilitypanel',false);openGuide()};
@@ -2135,6 +2214,12 @@ class Handler(BaseHTTPRequestHandler):
                 self.send(502, json.dumps({"error": str(e)[:80]}),
                           "application/json")
 
+        elif u.path == "/api/cache":
+            CACHE.clear(); NEWS_CACHE.clear(); EPG_CACHE.clear(); EPG_STATE.clear()
+            BOOK_TXT.clear(); BOOK_TXT_ORDER[:] = []
+            self.send(200, '{"ok":true,"msg":"Server caches cleared"}',
+                      "application/json")
+
         elif u.path == "/api/markets":
             syms = [s.strip()
                     for s in qs.get("symbols", [""])[0].split(",")
@@ -2172,6 +2257,34 @@ class Handler(BaseHTTPRequestHandler):
                 self.send(502, json.dumps({"error": str(e)[:80]}),
                           "application/json")
 
+        elif u.path == "/api/fundamentals":
+            sym = qs.get("sym", [""])[0][:20]
+            if not sym:
+                return self.send(400, '{"error":"missing symbol"}',
+                                 "application/json")
+            try:
+                self.send(200, json.dumps(yf_fundamentals(sym),
+                                          ensure_ascii=True),
+                          "application/json")
+            except Exception as e:
+                try:
+                    q = yf_chart(sym, "1d", "5m")
+                    self.send(200, json.dumps({
+                        "sym": sym, "name": q.get("name", sym),
+                        "pe": None, "forwardPe": None,
+                        "marketCap": None, "eps": None,
+                        "dividendYield": None, "sector": "",
+                        "industry": "", "source": "chart metadata"
+                    }, ensure_ascii=True), "application/json")
+                except Exception:
+                    self.send(200, json.dumps({
+                        "sym": sym, "name": sym, "pe": None,
+                        "forwardPe": None, "marketCap": None, "eps": None,
+                        "dividendYield": None, "sector": "",
+                        "industry": "", "source": "unavailable"
+                    }, ensure_ascii=True), "application/json")
+                # Quote-summary fundamentals are optional; chart data remains usable.
+
         elif u.path == "/api/books":
             qstr = qs.get("q", [""])[0].strip()[:60]
             lang = qs.get("lang", ["en,hi"])[0]
@@ -2180,14 +2293,14 @@ class Handler(BaseHTTPRequestHandler):
                 page = min(50, max(1, int(qs.get("page", ["1"])[0] or 1)))
             except Exception:
                 page = 1
-            params = {"languages": lang, "page": page}
+            params = {"languages": lang.split(","), "page": page}
             if qstr: params["search"] = qstr
             else:    params["sort"] = "popular"
             try:
                 j = gutendex(params)
+                if not (j or {}).get("results") and lang == "en,hi":
+                    j = gutendex({"page": page, "sort": "popular"})
             except Exception:
-                j = fallback_books(lang)
-            if not (j or {}).get("results"):
                 j = fallback_books(lang)
             items = []
             for g in j.get("results", []):
