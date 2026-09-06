@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 # ============================================================
-#  SUNRISE HUB v11  =  Radio + TV + NEWS + MARKETS + BOOKS
+#  Sg_ent_media_radio v11  =  Radio + TV + NEWS + MARKETS + BOOKS
 #  All free sources: iptv-org / radio-browser / epg.pw /
 #  GoogleNews+NDTV+TOI+Hindu+ET+MC RSS / Yahoo Finance /
 #  Gutendex (Project Gutenberg)
@@ -92,7 +92,7 @@ EXTINF_RE = re.compile(r"^#EXTINF:?-?\d*[^,]*,(.*)$")
 ATTR_RE   = re.compile(r'([\w-]+)="([^"]*)"')
 SAFE_SCHEMES = ("http", "https", "rtsp", "rtp", "udp", "mms")
 NORM_RE     = re.compile(r"[^a-z0-9]+")
-HLS_ROOT = Path(tempfile.gettempdir()) / "sunrise-hub-hls"
+HLS_ROOT = Path(tempfile.gettempdir()) / "sg-ent-media-radio-hls"
 HLS_JOBS, HLS_LOCK = {}, threading.RLock()
 STREAM_DIR = Path(os.environ.get(
     "STREAM_DIR",
@@ -298,7 +298,7 @@ def load_radio(key):
         try:
             url = "https://%s.api.radio-browser.info%s" % (mir, src["path"])
             req = urllib.request.Request(url,
-                    headers={"User-Agent": "SunriseHub/11.0"})
+                    headers={"User-Agent": "SgEntMediaRadio/11.0"})
             with urllib.request.urlopen(req, timeout=20) as r:
                 data = json.loads(r.read().decode("utf-8", errors="replace"))
             chans = []
@@ -819,7 +819,7 @@ def MOBILE_UA(ua): return bool(re.search(r"Android|iPhone|iPad|iPod|Mobile",
 SHELL = """<!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,
  maximum-scale=1,user-scalable=no">
-<title>Sunrise Hub</title>
+<title>Sg_ent_media_radio</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%93%BA%3C/text%3E%3C/svg%3E">
 <style>
 :root{--bg:#fffdf7;--card:#ffffff;--txt:#1e293b;--mut:#7c8699;
@@ -1144,7 +1144,7 @@ body[data-mode=podcasts] #panel-podcasts{display:block}
  </div>
  <div class="row1">
   <button class="hdrbtn" id="home" title="Home">&#x1F3E0;</button>
-  <h1>Sunrise Hub</h1>
+  <h1>Sg_ent_media_radio</h1>
   <div class="tabs" id="tabs"></div>
   <button class="hdrbtn" id="guide" title="TV Guide">&#128214;</button>
   <button class="hdrbtn" id="mob" title="Phone QR">&#x1F4F1;</button>
@@ -1223,7 +1223,7 @@ body[data-mode=podcasts] #panel-podcasts{display:block}
 </div>
 
 <div class="modal" id="welcome"><div class="modalcard">
- <h3>&#127749; Welcome to Sunrise Hub</h3>
+ <h3>&#127749; Welcome to Sg_ent_media_radio</h3>
  <p>TV &#8226; FM Radio &#8226; News &#8226; Stock Markets &#8226; Free Books.
  Quick system check:</p>
  <div id="wbchecks"><p>Checking&#8230;</p></div>
@@ -2254,7 +2254,7 @@ function load(pl){S.pl=pl;S.cat='all';S.q='';$('q').value='';
  buildTabs();
  $('playall').disabled=(pl==='favs'||pl==='recent');
  document.title=plain(pl==='favs'?T_FAV:pl==='recent'?T_REC:
-  (PL[pl]?PL[pl].n:'Sunrise'))+' - Sunrise Hub';
+  (PL[pl]?PL[pl].n:'Sg_ent_media_radio'))+' - Sg_ent_media_radio';
  if(pl==='favs'||pl==='recent'){S.now={};buildChips();render(true);return}
  if(S.cache[pl]){S.chans=S.cache[pl];S.now={};buildChips();render(true);
   if(isTV(pl))loadNow();return}
@@ -2321,7 +2321,7 @@ $('playall').onclick=function(){
  fetch('/playall?p='+S.pl).then(function(r){return r.json()})
  .then(function(j){toast(j.msg,j.ok?'ok':'bad')})};
 $('quit').onclick=function(){
- if(!confirm('Stop the Sunrise server for ALL devices?'))return;
+ if(!confirm('Stop the Sg_ent_media_radio server for ALL devices?'))return;
  fetch('/quit').then(function(){toast('Server stopped','ok')})};
 new IntersectionObserver(function(es){es.forEach(function(e){
  if(e.isIntersecting&&S.shown<filtered().length)render(false)})
@@ -2866,7 +2866,7 @@ def register_market_routes(app):
             raise HTTPException(status_code=502, detail=str(exc))
 
 if FastAPI is not None:
-    fastapi_app = FastAPI(title="Sunrise Hub API", version=VERSION)
+    fastapi_app = FastAPI(title="Sg_ent_media_radio API", version=VERSION)
     register_livestream_routes(fastapi_app)
     register_book_routes(fastapi_app)
     register_market_routes(fastapi_app)
@@ -2909,7 +2909,7 @@ def run():
     global LAN_IP, TS_IP
     LAN_IP = "" if IS_CLOUD else get_lan_ip()
     TS_IP = "" if IS_CLOUD else get_tailscale_ip()
-    log("[i] Sunrise Hub v%s" % VERSION)
+    log("[i] Sg_ent_media_radio v%s" % VERSION)
     log("[i] Mode: %s" % ("Render cloud" if IS_CLOUD else "Local PC"))
     log("[i] VLC: %s" % (VLC or "NOT FOUND"))
     start_server()
@@ -2933,7 +2933,7 @@ def _res(name, ok, info=""):
     return 1 if ok else 0
 
 def selftest():
-    log("\nSunrise Hub v%s - SELF TEST\n%s" % (VERSION, "-" * 46))
+    log("\nSg_ent_media_radio v%s - SELF TEST\n%s" % (VERSION, "-" * 46))
     sc = 0
     try:
         SHELL.encode("utf-8")

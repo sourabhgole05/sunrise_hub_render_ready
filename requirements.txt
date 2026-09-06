@@ -1,4 +1,4 @@
-# Sunrise Hub uses Python standard library only.
+# Sg_ent_media_radio uses Python standard library only.
 # qrcode is optional. If installed, the app generates QR images locally;
 # otherwise it automatically uses the web QR fallback.
 #

@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: sunrise-hub-iptv
+    name: sg-ent-media-radio
     runtime: python
     plan: free
     buildCommand: pip install -r requirements.txt
