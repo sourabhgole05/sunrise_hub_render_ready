@@ -54,6 +54,18 @@ HLS transcoding also requires the system `ffmpeg` executable in `PATH`;
 the existing direct browser/VLC playback remains available and the HLS route
 returns an explicit error instead of silently failing.
 
+The compatibility API exposes:
+
+- `POST /api/stream/start?input_url=...` and
+  `GET /api/stream/playlist.m3u8` for temporary HLS playback.
+- `GET /api/books/search` and `/api/books/gutenberg` for Internet Archive and
+  Gutendex results.
+- `GET /api/stock/{ticker}` and `/api/market/news-feed` for market data.
+
+The normal `python iptv_dashboard.py` server also exposes the stream start and
+manifest paths as GET-compatible routes, so the existing Render deployment
+does not need to be replaced with Uvicorn.
+
 ## Important
 
 `custom_playlists.json` is local-file storage. On Render Free, the filesystem is ephemeral, so custom playlists can disappear after a restart/redeploy. A persistent database/storage layer would be needed for durable cloud-created playlists.

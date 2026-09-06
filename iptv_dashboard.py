@@ -36,10 +36,11 @@ try:
 except ImportError:
     feedparser = None
 try:
-    from fastapi import FastAPI, HTTPException, Query
+    from fastapi import FastAPI, BackgroundTasks, HTTPException, Query
     from fastapi.responses import FileResponse
 except ImportError:
     FastAPI = None
+    BackgroundTasks = None
     HTTPException = None
     Query = None
     FileResponse = None
@@ -93,6 +94,11 @@ SAFE_SCHEMES = ("http", "https", "rtsp", "rtp", "udp", "mms")
 NORM_RE     = re.compile(r"[^a-z0-9]+")
 HLS_ROOT = Path(tempfile.gettempdir()) / "sunrise-hub-hls"
 HLS_JOBS, HLS_LOCK = {}, threading.RLock()
+STREAM_DIR = Path(os.environ.get(
+    "STREAM_DIR",
+    "/tmp/livestream" if os.name != "nt" else
+    str(Path(tempfile.gettempdir()) / "livestream")))
+STREAM_PROCESS, STREAM_LOCK = None, threading.RLock()
 
 def log(m):
     try: print(m)
@@ -103,16 +109,52 @@ def _hls_command(url, out_dir):
     if ffmpeg is not None:
         return ffmpeg.input(url, reconnect=1, reconnect_streamed=1,
                             reconnect_delay_max=4).output(
-            manifest, f="hls", hls_time=4, hls_list_size=6,
-            hls_flags="delete_segments+append_list+independent_segments",
+            manifest, vcodec="libx264", acodec="aac", hls_time=2,
+            hls_list_size=5, hls_flags="delete_segments",
             start_number=0, loglevel="warning").compile(overwrite_output=True)
     return ["ffmpeg", "-hide_banner", "-loglevel", "warning", "-y",
             "-reconnect", "1", "-reconnect_streamed", "1",
             "-reconnect_delay_max", "4", "-i", url,
-            "-c:v", "copy", "-c:a", "aac", "-f", "hls",
-            "-hls_time", "4", "-hls_list_size", "6",
-            "-hls_flags", "delete_segments+append_list+independent_segments",
+            "-c:v", "libx264", "-c:a", "aac", "-f", "hls",
+            "-hls_time", "2", "-hls_list_size", "5",
+            "-hls_flags", "delete_segments",
             manifest]
+
+def start_ffmpeg_transcode(input_url):
+    parsed = urlparse(input_url.strip())
+    if parsed.scheme not in ("http", "https"):
+        raise ValueError("Streaming accepts only http(s) input streams")
+    executable = shutil.which("ffmpeg")
+    if not executable:
+        raise RuntimeError("FFmpeg executable is not installed on this host")
+    STREAM_DIR.mkdir(parents=True, exist_ok=True)
+    with STREAM_LOCK:
+        global STREAM_PROCESS
+        if STREAM_PROCESS is not None and STREAM_PROCESS.poll() is None:
+            STREAM_PROCESS.terminate()
+        for path in STREAM_DIR.glob("index*"):
+            if path.is_file():
+                path.unlink()
+        cmd = [
+            executable, "-hide_banner", "-loglevel", "warning", "-y",
+            "-reconnect", "1", "-reconnect_streamed", "1",
+            "-reconnect_delay_max", "4", "-i", input_url,
+            "-c:v", "libx264", "-c:a", "aac", "-hls_time", "2",
+            "-hls_list_size", "5", "-hls_flags", "delete_segments",
+            str(STREAM_DIR / "index.m3u8")
+        ]
+        STREAM_PROCESS = subprocess.Popen(
+            cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL)
+    return str(STREAM_DIR / "index.m3u8")
+
+def stream_file(filename):
+    if not re.fullmatch(r"[a-zA-Z0-9_.-]+", filename):
+        return None
+    path = (STREAM_DIR / filename).resolve()
+    if path.parent != STREAM_DIR.resolve() or not path.is_file():
+        return None
+    return path
 
 def start_hls(url):
     parsed = urlparse(url)
@@ -2333,6 +2375,43 @@ class Handler(BaseHTTPRequestHandler):
                                                   "error": str(exc)}),
                                  "application/json")
 
+        if u.path == "/api/stream/start":
+            source = qs.get("input_url", qs.get("url", [""]))[0].strip()
+            try:
+                parsed = urlparse(source)
+                if parsed.scheme not in ("http", "https"):
+                    raise ValueError("Streaming accepts only http(s) input streams")
+                if not shutil.which("ffmpeg"):
+                    raise RuntimeError("FFmpeg executable is not installed on this host")
+                threading.Thread(target=start_ffmpeg_transcode, args=(source,),
+                                 daemon=True).start()
+                return self.send(202, json.dumps({
+                    "status": "Streaming started",
+                    "manifest_url": "/api/stream/playlist.m3u8"
+                }), "application/json")
+            except ValueError as exc:
+                return self.send(400, json.dumps({"error": str(exc)}),
+                                 "application/json")
+            except RuntimeError as exc:
+                return self.send(503, json.dumps({"error": str(exc)}),
+                                 "application/json")
+
+        if u.path == "/api/stream/playlist.m3u8":
+            path = stream_file("index.m3u8")
+            if path is None:
+                return self.send(404, '{"error":"Stream not active yet"}',
+                                 "application/json")
+            return self.send(200, path.read_bytes(), "application/vnd.apple.mpegurl")
+
+        m_stream = re.fullmatch(r"/api/stream/([a-zA-Z0-9_.-]+)", u.path)
+        if m_stream:
+            path = stream_file(m_stream.group(1))
+            if path is None:
+                return self.send(404, "Stream segment not found")
+            ctype = "video/mp2t" if path.suffix == ".ts" \
+                else "application/octet-stream"
+            return self.send(200, path.read_bytes(), ctype)
+
         m_hls = re.fullmatch(r"/hls/([a-f0-9]{32})/(.+)", u.path)
         if m_hls:
             path = hls_file(m_hls.group(1), m_hls.group(2))
@@ -2674,45 +2753,123 @@ class Handler(BaseHTTPRequestHandler):
         else:
             self.send(404, "<h1>404</h1>")
 
-if FastAPI is not None:
-    fastapi_app = FastAPI(title="Sunrise Hub API", version=VERSION)
-
-    @fastapi_app.get("/api/hls/start")
-    async def fastapi_hls_start(url: str = Query(..., min_length=8)):
+def register_livestream_routes(app):
+    @app.post("/api/stream/start")
+    async def trigger_stream(input_url: str, background_tasks: "BackgroundTasks"):
         try:
-            job_id = start_hls(url)
-        except (ValueError, RuntimeError) as exc:
+            parsed = urlparse(input_url.strip())
+            if parsed.scheme not in ("http", "https"):
+                raise ValueError("Streaming accepts only http(s) input streams")
+            if not shutil.which("ffmpeg"):
+                raise RuntimeError("FFmpeg executable is not installed on this host")
+            background_tasks.add_task(start_ffmpeg_transcode, input_url)
+            return {"status": "Streaming started",
+                    "manifest_url": "/api/stream/playlist.m3u8"}
+        except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
-        return {"ok": True, "job": job_id,
-                "manifest": "/hls/%s/stream.m3u8" % job_id}
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc))
 
-    @fastapi_app.get("/hls/{job_id}/{filename}")
-    async def fastapi_hls_file(job_id: str, filename: str):
-        path = hls_file(job_id, filename)
+    @app.get("/api/stream/playlist.m3u8")
+    async def get_stream_playlist():
+        path = stream_file("index.m3u8")
         if path is None:
-            raise HTTPException(status_code=404, detail="HLS segment not found")
-        media_type = ("application/vnd.apple.mpegurl"
-                      if path.suffix == ".m3u8" else "video/mp2t")
+            raise HTTPException(status_code=404, detail="Stream not active yet")
+        return FileResponse(path, media_type="application/vnd.apple.mpegurl")
+
+    @app.get("/api/stream/{filename}")
+    async def get_stream_file(filename: str):
+        path = stream_file(filename)
+        if path is None:
+            raise HTTPException(status_code=404, detail="Stream segment not found")
+        media_type = "video/mp2t" if path.suffix == ".ts" else "application/octet-stream"
         return FileResponse(path, media_type=media_type)
 
-    @fastapi_app.get("/api/books/search")
-    async def fastapi_books_search(q: str = "", lang: str = "en", page: int = 1):
-        archive = archive_books(q[:60], lang, max(1, min(page, 50)))
+def register_book_routes(app):
+    @app.get("/api/books/search")
+    async def fastapi_books_search(
+            query: str = "", language: str = "", q: str = "", lang: str = "en",
+            page: int = 1):
+        search = (query or q)[:60]
+        selected_language = (language or lang or "en")[:20]
+        archive = archive_books(search, selected_language, max(1, min(page, 50)))
         if archive:
-            return {"source": "internetarchive", "items": archive}
+            return {"query": search, "language": selected_language,
+                    "source": "internetarchive", "items": archive}
         try:
-            return {"source": "gutendex",
-                    "items": gutendex({"search": q[:60], "languages": lang,
-                                       "page": max(1, min(page, 50))}).get("results", [])}
+            result = gutendex({"search": search, "languages": selected_language,
+                               "page": max(1, min(page, 50))})
+            return {"query": search, "language": selected_language,
+                    "source": "gutendex", "items": result.get("results", [])}
         except Exception as exc:
             raise HTTPException(status_code=502, detail=str(exc))
 
-    @fastapi_app.get("/api/market/quote/{symbol}")
+    @app.get("/api/books/gutenberg")
+    async def fastapi_books_gutenberg(query: str = ""):
+        try:
+            result = gutendex({"search": query[:60]})
+            items = []
+            for book in result.get("results", [])[:5]:
+                formats = book.get("formats") or {}
+                items.append({
+                    "title": book.get("title", "Unknown Title"),
+                    "authors": [a.get("name", "Unknown")
+                                for a in book.get("authors", [])],
+                    "epub_link": formats.get("application/epub+zip")
+                })
+            return {"results": items}
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=str(exc))
+
+def register_market_routes(app):
+    @app.get("/api/market/quote/{symbol}")
     async def fastapi_market_quote(symbol: str):
         try:
             return yf_quote_snapshot(symbol[:20])
         except Exception as exc:
             raise HTTPException(status_code=502, detail=str(exc))
+
+    @app.get("/api/stock/{ticker}")
+    async def get_stock_dashboard(ticker: str):
+        symbol = ticker[:20]
+        try:
+            quote_data = yf_chart(symbol, "5d", "1d")
+            news = []
+            if yfinance is not None:
+                for item in (getattr(yfinance.Ticker(symbol), "news", []) or [])[:5]:
+                    content = item.get("content") or item
+                    provider = content.get("provider") or {}
+                    target = content.get("canonicalUrl") or \
+                        content.get("clickThroughUrl") or {}
+                    news.append({
+                        "title": content.get("title"),
+                        "publisher": provider.get("displayName") or
+                                    item.get("publisher"),
+                        "link": target.get("url") if isinstance(target, dict)
+                                else target,
+                    })
+            return {
+                "ticker": symbol.upper(),
+                "current_price": quote_data.get("price"),
+                "previous_close": quote_data.get("prev"),
+                "chart_data": quote_data.get("candles", []),
+                "news": news,
+            }
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=str(exc))
+
+    @app.get("/api/market/news-feed")
+    async def get_live_market_news():
+        try:
+            return {"market_news": fetch_market_news_feed()[:5]}
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=str(exc))
+
+if FastAPI is not None:
+    fastapi_app = FastAPI(title="Sunrise Hub API", version=VERSION)
+    register_livestream_routes(fastapi_app)
+    register_book_routes(fastapi_app)
+    register_market_routes(fastapi_app)
 else:
     fastapi_app = None
 
