@@ -623,6 +623,11 @@ body.playing #toast{bottom:110px}
  max-height:92vh;overflow-y:auto;box-shadow:var(--sh)}
 .modalcard h3{margin-bottom:10px}
 .modalcard p{font-size:13.5px;color:var(--mut);margin:8px 0;line-height:1.5}
+.playercard{max-width:760px}
+#tvplayer{display:block;width:100%;max-height:62vh;min-height:180px;
+ background:#000;border-radius:12px;margin:12px 0}
+.playeractions{display:flex;gap:8px;flex-wrap:wrap}
+.playeractions .big{flex:1;min-width:145px;text-align:center}
 .lanurl{background:var(--bg);border:1px dashed var(--acc2);border-radius:10px;
  padding:10px;text-align:center;font-size:16px;font-weight:700;margin:10px 0;
  user-select:all}
@@ -771,8 +776,8 @@ body[data-mode=books] #panel-books{display:block}
  #q{width:100%;min-width:0;order:-1}
  .row2{gap:8px}
  .big{padding:9px 12px;font-size:12.5px}
- .grid{grid-template-columns:repeat(auto-fill,minmax(104px,1fr));
-  gap:10px;padding:10px 10px 180px}
+ .grid{grid-template-columns:repeat(2,minmax(0,1fr));
+  gap:8px;padding:10px 8px 180px}
  .card{padding:8px;border-radius:14px}
  .card img{width:42px;height:42px}
  .cname{font-size:12px;height:30px}
@@ -789,6 +794,9 @@ body[data-mode=books] #panel-books{display:block}
  #pbinfo{min-width:calc(100% - 116px)}
  #pbar button{width:46px;height:46px}
  #pbplay{order:2}#pbstop{order:3}
+ #tvplayer{min-height:150px;max-height:48vh}
+ .playeractions{display:grid;grid-template-columns:1fr 1fr}
+ .playeractions .big{min-width:0;padding:10px 6px}
  body.playing #toast{bottom:180px}
  body{padding-top:env(safe-area-inset-top)}
  .card:hover{transform:none}
@@ -883,8 +891,8 @@ body[data-mode=books] #panel-books{display:block}
  &#128200; Markets: live NIFTY/Sensex/US + watchlist, tap for chart.<br>
  &#128218; Books: free classics English+&#2361;&#2367;&#2344;&#2381;&#2342;&#2368;,
  position auto-saved.<br> Radio keeps playing while you read &#127911;</p>
- <div class="mrow">
-  <button class="big blue" onclick="showModal('mobpanel',true);wbDone()">
+ <div class="mrow" id="welcome-actions">
+  <button class="big blue" id="setupPhone" onclick="showModal('mobpanel',true);wbDone()">
    &#x1F4F1; Set up phone</button>
   <button class="big grey" onclick="wbDone()">Start exploring</button></div>
 </div></div>
@@ -896,6 +904,18 @@ body[data-mode=books] #panel-books{display:block}
  <p><b>Step 1.</b> Same Wi-Fi (home QR) or Tailscale ON (anywhere QR).<br>
  <b>Step 2.</b> Scan / type address into the phone browser.</p>
  <div class="mrow" id="mlinks"></div>
+</div></div>
+
+<div class="modal" id="playermodal"><div class="modalcard playercard">
+<button class="closex" onclick="closePlayer()">&times;</button>
+<h3 id="playertitle">Watch stream</h3>
+<video id="tvplayer" controls playsinline preload="metadata"></video>
+<p id="playerhint">Choose where you want to play this stream.</p>
+<div class="playeractions">
+ <button class="big blue" id="playerplay">Play here</button>
+ <button class="big cy" id="playervlc">Open in VLC</button>
+ <button class="big grey" id="playerexternal">Open in browser</button>
+</div>
 </div></div>
 
 <div class="modal" id="guidepanel"><div class="modalcard">
@@ -1265,17 +1285,64 @@ function findAny(u){var pools=[cur(),S.favs,S.hist,S.chans];
   for(var i=0;i<pools[p].length;i++)
    if(pools[p][i].u===u)return pools[p][i];
  return null}
+var PLAYER={url:'',item:null};
+function closePlayer(){
+ var v=$('tvplayer');v.pause();v.removeAttribute('src');v.load();
+ showModal('playermodal',false);PLAYER.url='';PLAYER.item=null}
+window.closePlayer=closePlayer;
+function vlcLink(u){
+ var p=urlparseForPlayer(u);
+ if(/Android/i.test(navigator.userAgent))
+  return 'intent://'+p.hostpath+'#Intent;scheme='+p.scheme+
+   ';package=org.videolan.vlc;end';
+ if(/iPhone|iPad|iPod/i.test(navigator.userAgent))
+  return 'vlc-x-callback://x-callback-url/stream?url='+encodeURIComponent(u);
+ return '';
+}
+function urlparseForPlayer(u){
+ var p=u.indexOf('://'),m=p>0?[u.slice(0,p),u.slice(p+3)]:null;
+ return {scheme:m?m[0]:'http',hostpath:m?m[1]:u};
+}
+function playerPlay(){
+ var v=$('tvplayer');
+ if(!PLAYER.url)return;
+ v.src=PLAYER.url;v.play().catch(function(){
+  $('playerhint').textContent='Tap the play button if autoplay is blocked by your browser.'
+ });
+ $('playerhint').textContent='Playing in the phone browser.';
+}
+function openVlcMobile(){
+ if(!PLAYER.url)return;
+ var link=vlcLink(PLAYER.url);
+ if(link){window.location.href=link;
+  $('playerhint').textContent='If VLC is installed, your phone will open it. Otherwise use Play here.';
+  return}
+ $('playerhint').textContent='Your phone cannot launch VLC from this browser. Use Play here.';
+}
+function openPlayer(it,u){
+ PLAYER.url=u;PLAYER.item=it;
+ $('playertitle').textContent='Watch '+plain(it.n||'stream').slice(0,60);
+ $('playerhint').textContent=/Android|iPhone|iPad|iPod/i.test(navigator.userAgent)
+  ?'VLC can be opened when installed; otherwise play in this browser.'
+  :'Choose a playback option.';
+ $('playervlc').style.display=vlcLink(u)?'':'none';
+ $('playerplay').style.display=/^https?:/i.test(u)?'':'none';
+ $('playerexternal').style.display=/^https?:/i.test(u)?'':'none';
+ showModal('playermodal',true);
+ if(/^https?:/i.test(u))playerPlay();
+}
+$('playerplay').onclick=playerPlay;
+$('playervlc').onclick=openVlcMobile;
+$('playerexternal').onclick=function(){
+ if(PLAYER.url)window.open(PLAYER.url,'_blank','noopener')};
 function route(it,u){
  var tp=it.tp||plTypeOf(S.pl)||'tv';
  if(tp==='radio'){radioPlay(it);return}
+ if(ISMOBILE){
+  pushHist(it,'tv');openPlayer(it,u);return}
  if(IS_CLOUD){
   if(/^https?:/i.test(u)){toast('Opening stream...');pushHist(it,'tv');window.open(u,'_blank','noopener');}
   else toast('This stream requires VLC on a local PC','bad');
-  return}
- if(ISMOBILE){
-  if(/^https?:/i.test(u)){toast('Playing on phone...');
-   pushHist(it,'tv');window.location.href=u;}
-  else toast('Use phone panel > download playlist > open in VLC','bad');
   return}
  toast('Opening '+plain(esc(it.n)).slice(0,40)+'...');
  fetch('/play?url='+encodeURIComponent(u)).then(function(r){return r.json()})
@@ -1770,7 +1837,7 @@ document.addEventListener('keydown',function(e){
  if(e.key==='/'&&!ISMOBILE&&document.activeElement!==$('q')&&
   MODE==='media'){e.preventDefault();$('q').focus()}
  if(e.key==='Escape'){
-  ['mobpanel','guidepanel','setpanel','welcome','readerview','chartmodal']
+  ['mobpanel','guidepanel','setpanel','welcome','readerview','chartmodal','playermodal']
    .forEach(function(m){showModal(m,false)});
   if(document.activeElement===$('q')&&MODE==='media'){
    $('q').value='';$('q').dispatchEvent(new Event('input'))}}});
@@ -1792,7 +1859,7 @@ new IntersectionObserver(function(es){es.forEach(function(e){
 
 (function(){
  if(ISMOBILE||IS_CLOUD){$('quit').style.display='none'}
- if(ISMOBILE){$('mob').style.display='none'}
+ if(ISMOBILE){$('mob').style.display='none';$('setupPhone').style.display='none'}
  if(IS_CLOUD){$('playall').style.display='none';$('pbvlc').style.display='none'}
  var h='';
  for(var k in PL)h+='<a class="big '+(PL[k].t==='radio'?'cy':'blue')+

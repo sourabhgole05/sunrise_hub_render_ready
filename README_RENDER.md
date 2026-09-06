@@ -21,6 +21,9 @@ The public version:
 - serves the Sunrise Hub UI over HTTPS through Render
 - keeps radio browser playback in the user's browser where supported
 - opens HTTP/HTTPS TV stream URLs in a new browser tab
+- provides a mobile in-page TV player with browser playback plus an Open in VLC
+  handoff when the phone supports VLC intents
+- hides phone setup controls when the site is already open on a phone
 - disables server-side VLC actions because VLC cannot be launched on the user's PC from the cloud
 - hides the local Stop Server and Whole List in VLC controls
 - shows a public-URL QR code
