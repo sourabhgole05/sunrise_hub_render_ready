@@ -64,6 +64,13 @@ PODCAST_FEEDS = [
     ("BBC World Service", "https://podcasts.files.bbci.co.uk/p02nq0gn.rss"),
     ("NPR News Now", "https://feeds.npr.org/500005/podcast.xml"),
     ("The Hindu Podcast", "https://www.thehindu.com/podcast/feeder/default.rss"),
+    ("Gubbaare (Hindi stories)", "https://rss.buzzsprout.com/1280120.rss"),
+]
+PODCAST_DIRECTORIES = [
+    ("Radio India Podcasts", "https://www.radioindia.in/podcasts",
+     "Indian podcasts by language and genre"),
+    ("Feedspot Hindi Podcasts", "https://podcast.feedspot.com/hindi_language_podcasts/",
+     "Hindi shows and podcast discovery"),
 ]
 PLAYLISTS = {}
 RADIO_SOURCES = {
@@ -469,6 +476,10 @@ def _feed_items(src, url, out):
             if not img:
                 m = re.search(r'<img[^>]+src=["\']([^"\']+)', desc or "")
                 if m: img = m.group(1)
+            if not img:
+                image = it.find("{http://www.itunes.com/dtds/podcast-1.0.dtd}image")
+                if image is not None:
+                    img = image.get("href") or ""
             snip = H.unescape(re.sub(r"<[^>]+>", " ", desc or ""))
             snip = re.sub(r"\s+", " ", snip).strip()[:200]
             out.append({"t": title[:140], "l": link, "s": src, "d": img,
@@ -511,7 +522,7 @@ def fetch_podcasts():
         t.start()
         threads.append(t)
     for t in threads:
-        t.join(timeout=10)
+        t.join(timeout=15)
     seen, out = set(), []
     for item in sorted(items, key=lambda x: x["pub"], reverse=True):
         key = norm(item["t"])[:70]
@@ -519,9 +530,14 @@ def fetch_podcasts():
             continue
         seen.add(key)
         out.append(item)
-        if len(out) >= 40:
-            break
-    return out
+    # Keep every configured show represented instead of letting one busy feed
+    # crowd the Hindi and Indian sources out of the first page.
+    preferred = []
+    for src, _url in PODCAST_FEEDS:
+        preferred.extend([item for item in out if item["s"] == src][:20])
+    preferred_keys = {norm(item["t"])[:70] for item in preferred}
+    preferred.extend(item for item in out if norm(item["t"])[:70] not in preferred_keys)
+    return preferred[:80]
 
 def fetch_market_news_feed():
     url = "https://feeds.finance.yahoo.com/rss/2.0/headline?s=%5ENSEI&region=IN&lang=en-IN"
@@ -1140,7 +1156,8 @@ body[data-mode=podcasts] #panel-podcasts{display:block}
 </div>
 <div class="panel" id="panel-podcasts">
  <h3>Latest stories and podcasts</h3>
- <p class="note">Listen to current episodes from public RSS feeds. Audio stays available while you browse.</p>
+ <p class="note">Live episodes from public RSS feeds, including Hindi stories from Gubbaare.</p>
+ <div id="podfeeds" class="charttools"></div>
  <div class="pbar2"><input id="podq" placeholder="Filter stories or shows…" autocomplete="off">
   <button class="big blue" id="podrefresh">Refresh</button></div>
  <div id="podlist" class="podlist"><div class="pempty">Loading podcasts...</div></div>
@@ -1817,7 +1834,13 @@ function podShow(){
  $('podlist').innerHTML='<div class="pempty">Loading podcasts...</div>';
  fetch('/api/podcasts').then(function(r){return r.json()})
   .then(function(j){
-   POD.loaded=true;POD.items=j.items||[];podPaint();
+   POD.loaded=true;POD.items=j.items||[];
+   var links='';
+   (j.directories||[]).forEach(function(a){
+    links+='<a class="big" target="_blank" rel="noopener" href="'+esc(a.url)+
+     '">'+esc(a.name)+'</a>'});
+   $('podfeeds').innerHTML='<span class="note">Discover more:</span>'+links;
+   podPaint();
    })
    .catch(function(){$('podlist').innerHTML=
    '<div class="pempty">Could not load podcasts. <button class="big" onclick="podShow()">Retry</button></div>'})}
@@ -2376,7 +2399,12 @@ class Handler(BaseHTTPRequestHandler):
         elif u.path == "/api/podcasts":
             try:
                 items = fetch_podcasts()
-                self.send(200, json.dumps({"count": len(items), "items": items},
+                self.send(200, json.dumps({"count": len(items), "items": items,
+                                          "feeds": [{"name": n, "url": url}
+                                                    for n, url in PODCAST_FEEDS],
+                                          "directories": [
+                                              {"name": n, "url": url, "description": d}
+                                              for n, url, d in PODCAST_DIRECTORIES]},
                                           ensure_ascii=True), "application/json")
             except Exception as e:
                 self.send(502, json.dumps({"error": str(e)[:80]}),
@@ -2503,30 +2531,9 @@ class Handler(BaseHTTPRequestHandler):
             except Exception:
                 page = 1
             items = archive_books(query, language, page)
-            source = "internetarchive"
-            if not items:
-                try:
-                    fallback_lang = language if language in ("en", "hi") else "en"
-                    fallback = gutendex({"search": query, "languages": fallback_lang,
-                                         "page": page}) if query else gutendex(
-                                             {"languages": fallback_lang, "page": page,
-                                              "sort": "popular"})
-                    items = [{
-                        "id": book.get("id"),
-                        "title": book.get("title") or "Untitled",
-                        "author": ((book.get("authors") or [{}])[0].get("name")
-                                   or "Unknown"),
-                        "language": fallback_lang,
-                        "downloads": book.get("download_count", 0),
-                        "details": "https://gutendex.com/books/%s" % book.get("id"),
-                        "epub": (book.get("formats") or {}).get(
-                            "application/epub+zip", "")
-                    } for book in fallback.get("results", [])]
-                    source = "gutendex"
-                except Exception:
-                    source = "unavailable"
             self.send(200, json.dumps({"items": items, "page": page,
-                                       "source": source},
+                                       "source": "internetarchive"
+                                       if internetarchive else "unavailable"},
                                       ensure_ascii=True), "application/json")
 
         elif u.path == "/api/market/quote":
