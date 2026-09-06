@@ -31,7 +31,7 @@ The public version:
 
 ## Deploy
 
-Repository: `sourabhgole05/livetvmediawithvd`
+Repository: `sourabhgole05/sunrise_hub_render_ready`
 Branch: `main`
 
 If `render.yaml` is committed at the repository root, create the service from the Blueprint or create a Web Service manually with:
@@ -41,6 +41,18 @@ If `render.yaml` is committed at the repository root, create the service from th
 - Health Check Path: `/healthz`
 
 Do not use Streamlit Cloud for this file. The application is a normal Python `http.server` application, not a Streamlit application.
+
+## Optional integrations
+
+`requirements.txt` includes optional integrations for Internet Archive/Gutendex
+books, Yahoo Finance market quotes, RSS parsing, and a FastAPI compatibility
+app. The normal Render start command remains `python iptv_dashboard.py`.
+To run the compatibility API directly, use `uvicorn iptv_dashboard:fastapi_app`.
+
+HLS transcoding also requires the system `ffmpeg` executable in `PATH`;
+`ffmpeg-python` is only the Python command builder. If FFmpeg is unavailable,
+the existing direct browser/VLC playback remains available and the HLS route
+returns an explicit error instead of silently failing.
 
 ## Important
 

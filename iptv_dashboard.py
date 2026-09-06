@@ -9,6 +9,8 @@
 # ============================================================
 import html as H, json, os, re, shutil, socket, subprocess, sys, threading, time
 import traceback, base64, io, calendar, gzip
+import mimetypes, tempfile, uuid
+from pathlib import Path
 import urllib.request, urllib.error, webbrowser
 import xml.etree.ElementTree as ET
 from email.utils import parsedate_to_datetime
@@ -16,6 +18,31 @@ from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import urlparse, parse_qs, quote, urlencode
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+try:
+    import ffmpeg
+except ImportError:
+    ffmpeg = None
+try:
+    import internetarchive
+except ImportError:
+    internetarchive = None
+try:
+    import yfinance
+except ImportError:
+    yfinance = None
+try:
+    import feedparser
+except ImportError:
+    feedparser = None
+try:
+    from fastapi import FastAPI, HTTPException, Query
+    from fastapi.responses import FileResponse
+except ImportError:
+    FastAPI = None
+    HTTPException = None
+    Query = None
+    FileResponse = None
 
 VERSION   = "11.0"
 CACHE_TTL = 1800
@@ -57,10 +84,76 @@ EXTINF_RE = re.compile(r"^#EXTINF:?-?\d*[^,]*,(.*)$")
 ATTR_RE   = re.compile(r'([\w-]+)="([^"]*)"')
 SAFE_SCHEMES = ("http", "https", "rtsp", "rtp", "udp", "mms")
 NORM_RE     = re.compile(r"[^a-z0-9]+")
+HLS_ROOT = Path(tempfile.gettempdir()) / "sunrise-hub-hls"
+HLS_JOBS, HLS_LOCK = {}, threading.RLock()
 
 def log(m):
     try: print(m)
     except Exception: pass
+
+def _hls_command(url, out_dir):
+    manifest = str(out_dir / "stream.m3u8")
+    if ffmpeg is not None:
+        return ffmpeg.input(url, reconnect=1, reconnect_streamed=1,
+                            reconnect_delay_max=4).output(
+            manifest, f="hls", hls_time=4, hls_list_size=6,
+            hls_flags="delete_segments+append_list+independent_segments",
+            start_number=0, loglevel="warning").compile(overwrite_output=True)
+    return ["ffmpeg", "-hide_banner", "-loglevel", "warning", "-y",
+            "-reconnect", "1", "-reconnect_streamed", "1",
+            "-reconnect_delay_max", "4", "-i", url,
+            "-c:v", "copy", "-c:a", "aac", "-f", "hls",
+            "-hls_time", "4", "-hls_list_size", "6",
+            "-hls_flags", "delete_segments+append_list+independent_segments",
+            manifest]
+
+def start_hls(url):
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        raise ValueError("HLS proxy accepts only http(s) input streams")
+    if shutil.which("ffmpeg") is None and ffmpeg is None:
+        raise RuntimeError("FFmpeg is not installed on this host")
+    HLS_ROOT.mkdir(parents=True, exist_ok=True)
+    job_id = uuid.uuid4().hex
+    out_dir = HLS_ROOT / job_id
+    out_dir.mkdir()
+    try:
+        proc = subprocess.Popen(_hls_command(url, out_dir),
+                                stdout=subprocess.DEVNULL,
+                                stderr=subprocess.PIPE,
+                                text=True)
+    except OSError as exc:
+        shutil.rmtree(out_dir, ignore_errors=True)
+        raise RuntimeError("Could not start FFmpeg: %s" % exc) from exc
+    with HLS_LOCK:
+        HLS_JOBS[job_id] = {"url": url, "dir": out_dir, "proc": proc,
+                            "created": time.time()}
+    threading.Thread(target=_reap_hls, args=(job_id,), daemon=True).start()
+    return job_id
+
+def _reap_hls(job_id):
+    with HLS_LOCK:
+        job = HLS_JOBS.get(job_id)
+    if not job:
+        return
+    proc = job["proc"]
+    proc.wait()
+    time.sleep(30)
+    with HLS_LOCK:
+        HLS_JOBS.pop(job_id, None)
+    shutil.rmtree(job["dir"], ignore_errors=True)
+
+def hls_file(job_id, filename):
+    if not re.fullmatch(r"[a-zA-Z0-9_.-]+", filename):
+        return None
+    with HLS_LOCK:
+        job = HLS_JOBS.get(job_id)
+    if not job:
+        return None
+    path = (job["dir"] / filename).resolve()
+    if path.parent != job["dir"].resolve() or not path.is_file():
+        return None
+    return path
 
 def norm(s): return NORM_RE.sub("", (s or "").lower())
 
@@ -430,6 +523,18 @@ def fetch_podcasts():
             break
     return out
 
+def fetch_market_news_feed():
+    url = "https://feeds.finance.yahoo.com/rss/2.0/headline?s=%5ENSEI&region=IN&lang=en-IN"
+    if feedparser is not None:
+        parsed = feedparser.parse(url)
+        return [{"t": x.get("title", ""), "l": x.get("link", ""),
+                 "b": H.unescape(re.sub(r"<[^>]+>", " ", x.get("summary", ""))).strip(),
+                 "pub": _parse_pub(x.get("published", "")), "s": "Yahoo Finance"}
+                for x in parsed.entries[:30] if x.get("title")]
+    out = []
+    _feed_items("Yahoo Finance", url, out)
+    return out[:30]
+
 # ---------------- MARKETS (Yahoo Finance public chart API) ----------------
 YF_HOSTS = ("query1", "query2")
 
@@ -503,6 +608,17 @@ def yf_fundamentals(sym):
             "sector": profile.get("sector") or "",
             "industry": profile.get("industry") or ""}
 
+def yf_quote_snapshot(sym):
+    if yfinance is None:
+        return yf_chart(sym, "5d", "1d")
+    ticker = yfinance.Ticker(sym)
+    info = ticker.fast_info
+    hist = ticker.history(period="5d", interval="1d", auto_adjust=False)
+    closes = [float(x) for x in hist["Close"].dropna().tolist()]
+    return {"sym": sym, "price": float(info.last_price) if info.last_price else None,
+            "prev": float(info.previous_close) if info.previous_close else None,
+            "trend": closes, "currency": getattr(info, "currency", "") or ""}
+
 # ---------------- BOOKS (Project Gutenberg via Gutendex) ----------------
 def gutendex(params):
     q = urlencode(params, doseq=True)
@@ -510,6 +626,36 @@ def gutendex(params):
                                  headers={"User-Agent": "Mozilla/5.0"})
     with urllib.request.urlopen(req, timeout=12) as r:
         return json.loads(r.read().decode("utf-8", errors="replace"))
+
+def archive_books(query, language, page):
+    if internetarchive is None:
+        return []
+    q = 'mediatype:texts AND (format:"Text PDF" OR format:PDF)'
+    if query:
+        q += ' AND title:("%s")' % re.sub(r'["\\]', " ", query)[:60]
+    if language == "hi":
+        q += ' AND language:"Hindi"'
+    elif language == "en":
+        q += ' AND language:"English"'
+    try:
+        rows = internetarchive.search_items(q, fields=[
+            "identifier", "title", "creator", "description", "language",
+            "downloads"], params={"page": page, "rows": 24})
+        out = []
+        for row in rows:
+            ident = row.get("identifier")
+            if not ident:
+                continue
+            out.append({"id": ident, "title": row.get("title") or ident,
+                        "author": row.get("creator") or "Unknown",
+                        "language": row.get("language") or language,
+                        "downloads": row.get("downloads") or 0,
+                        "details": "https://archive.org/details/%s" % ident,
+                        "pdf": "https://archive.org/download/%s/%s.pdf" %
+                               (ident, ident)})
+        return out
+    except Exception:
+        return []
 
 BOOK_TXT, BOOK_TXT_ORDER = {}, []               # QA fix #6: capped cache
 BOOK_FALLBACK_ITEMS = [
@@ -2151,6 +2297,28 @@ class Handler(BaseHTTPRequestHandler):
         if u.path == "/healthz":
             return self.send(200, "ok", "text/plain; charset=utf-8")
 
+        if u.path == "/api/hls/start":
+            source = qs.get("url", [""])[0].strip()
+            try:
+                job_id = start_hls(source)
+                return self.send(202, json.dumps({
+                    "ok": True, "job": job_id,
+                    "manifest": "/hls/%s/stream.m3u8" % job_id
+                }), "application/json")
+            except (ValueError, RuntimeError) as exc:
+                return self.send(400, json.dumps({"ok": False,
+                                                  "error": str(exc)}),
+                                 "application/json")
+
+        m_hls = re.fullmatch(r"/hls/([a-f0-9]{32})/(.+)", u.path)
+        if m_hls:
+            path = hls_file(m_hls.group(1), m_hls.group(2))
+            if path is None:
+                return self.send(404, "HLS segment not found")
+            ctype = "application/vnd.apple.mpegurl" if path.suffix == ".m3u8" \
+                else "video/mp2t"
+            return self.send(200, path.read_bytes(), ctype)
+
         if u.path == "/":
             pl_json = json.dumps(
                 {k: {"n": v["name"],
@@ -2210,6 +2378,15 @@ class Handler(BaseHTTPRequestHandler):
                 items = fetch_podcasts()
                 self.send(200, json.dumps({"count": len(items), "items": items},
                                           ensure_ascii=True), "application/json")
+            except Exception as e:
+                self.send(502, json.dumps({"error": str(e)[:80]}),
+                          "application/json")
+
+        elif u.path == "/api/market/news":
+            try:
+                self.send(200, json.dumps({"items": fetch_market_news_feed()},
+                                          ensure_ascii=True),
+                          "application/json")
             except Exception as e:
                 self.send(502, json.dumps({"error": str(e)[:80]}),
                           "application/json")
@@ -2317,6 +2494,53 @@ class Handler(BaseHTTPRequestHandler):
                  "prev": bool(j.get("previous")),
                  "items": items}, ensure_ascii=True),
                 "application/json")
+
+        elif u.path == "/api/books/archive":
+            query = qs.get("q", [""])[0].strip()[:60]
+            language = qs.get("lang", ["en"])[0]
+            try:
+                page = min(50, max(1, int(qs.get("page", ["1"])[0] or 1)))
+            except Exception:
+                page = 1
+            items = archive_books(query, language, page)
+            source = "internetarchive"
+            if not items:
+                try:
+                    fallback_lang = language if language in ("en", "hi") else "en"
+                    fallback = gutendex({"search": query, "languages": fallback_lang,
+                                         "page": page}) if query else gutendex(
+                                             {"languages": fallback_lang, "page": page,
+                                              "sort": "popular"})
+                    items = [{
+                        "id": book.get("id"),
+                        "title": book.get("title") or "Untitled",
+                        "author": ((book.get("authors") or [{}])[0].get("name")
+                                   or "Unknown"),
+                        "language": fallback_lang,
+                        "downloads": book.get("download_count", 0),
+                        "details": "https://gutendex.com/books/%s" % book.get("id"),
+                        "epub": (book.get("formats") or {}).get(
+                            "application/epub+zip", "")
+                    } for book in fallback.get("results", [])]
+                    source = "gutendex"
+                except Exception:
+                    source = "unavailable"
+            self.send(200, json.dumps({"items": items, "page": page,
+                                       "source": source},
+                                      ensure_ascii=True), "application/json")
+
+        elif u.path == "/api/market/quote":
+            sym = qs.get("sym", [""])[0].strip()[:20]
+            if not sym:
+                return self.send(400, '{"error":"missing symbol"}',
+                                 "application/json")
+            try:
+                self.send(200, json.dumps(yf_quote_snapshot(sym),
+                                          ensure_ascii=True),
+                          "application/json")
+            except Exception as e:
+                self.send(502, json.dumps({"error": str(e)[:100]}),
+                          "application/json")
 
         elif u.path == "/api/booktext":
             try:
@@ -2442,6 +2666,48 @@ class Handler(BaseHTTPRequestHandler):
                 threading.Timer(0.4, lambda: SRV.shutdown()).start()
         else:
             self.send(404, "<h1>404</h1>")
+
+if FastAPI is not None:
+    fastapi_app = FastAPI(title="Sunrise Hub API", version=VERSION)
+
+    @fastapi_app.get("/api/hls/start")
+    async def fastapi_hls_start(url: str = Query(..., min_length=8)):
+        try:
+            job_id = start_hls(url)
+        except (ValueError, RuntimeError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        return {"ok": True, "job": job_id,
+                "manifest": "/hls/%s/stream.m3u8" % job_id}
+
+    @fastapi_app.get("/hls/{job_id}/{filename}")
+    async def fastapi_hls_file(job_id: str, filename: str):
+        path = hls_file(job_id, filename)
+        if path is None:
+            raise HTTPException(status_code=404, detail="HLS segment not found")
+        media_type = ("application/vnd.apple.mpegurl"
+                      if path.suffix == ".m3u8" else "video/mp2t")
+        return FileResponse(path, media_type=media_type)
+
+    @fastapi_app.get("/api/books/search")
+    async def fastapi_books_search(q: str = "", lang: str = "en", page: int = 1):
+        archive = archive_books(q[:60], lang, max(1, min(page, 50)))
+        if archive:
+            return {"source": "internetarchive", "items": archive}
+        try:
+            return {"source": "gutendex",
+                    "items": gutendex({"search": q[:60], "languages": lang,
+                                       "page": max(1, min(page, 50))}).get("results", [])}
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=str(exc))
+
+    @fastapi_app.get("/api/market/quote/{symbol}")
+    async def fastapi_market_quote(symbol: str):
+        try:
+            return yf_quote_snapshot(symbol[:20])
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=str(exc))
+else:
+    fastapi_app = None
 
 def net_ok():
     try:
