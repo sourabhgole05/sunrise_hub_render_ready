@@ -33,6 +33,11 @@ BASE_PLAYLISTS = {
     "world": {"name": "&#x1F30D; Worldwide",
               "url": "https://iptv-org.github.io/iptv/index.m3u"},
 }
+PODCAST_FEEDS = [
+    ("BBC World Service", "https://podcasts.files.bbci.co.uk/p02nq0gn.rss"),
+    ("NPR News Now", "https://feeds.npr.org/500005/podcast.xml"),
+    ("The Hindu Podcast", "https://www.thehindu.com/podcast/feeder/default.rss"),
+]
 PLAYLISTS = {}
 RADIO_SOURCES = {
     "rin":  {"name": "&#x1F399; Radio India",
@@ -221,12 +226,25 @@ def epg_ensure_async(k):
 
 def _epg_load(key):
     try:
-        req = urllib.request.Request(EPG_FILES[key],
-                                     headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(req, timeout=120) as r:
-            raw = r.read()
-        if raw[:2] == b"\x1f\x8b":                 # QA fix #1: real gzip!
-            raw = gzip.decompress(raw)
+        raw = None
+        urls = [EPG_FILES[key], EPG_FILES[key].replace(".xml.gz", ".xml")]
+        last = None
+        for url in urls:
+            try:
+                req = urllib.request.Request(url,
+                    headers={"User-Agent": "Mozilla/5.0", "Accept-Encoding": "gzip"})
+                with urllib.request.urlopen(req, timeout=45) as r:
+                    raw = r.read()
+                if raw[:2] == b"\x1f\x8b":
+                    raw = gzip.decompress(raw)
+                if b"<tv" not in raw[:20000]:
+                    raise RuntimeError("EPG response was not XML")
+                break
+            except Exception as e:
+                last = e
+                raw = None
+        if raw is None:
+            raise RuntimeError("EPG source unavailable: %s" % last)
         now, horizon = int(time.time()), int(time.time()) + 8*3600
         names, progs = {}, {}
         for ev, el in ET.iterparse(io.BytesIO(raw), events=("end",)):
@@ -348,15 +366,20 @@ def _feed_items(src, url, out):
             if not link: link = gt("guid")
             desc = gt("description") or gt("summary") or gt("content")
             img = ""
+            audio = ""
             enc = it.find("enclosure")
-            if enc is not None and (enc.get("type") or "").startswith("image"):
-                img = enc.get("url") or ""
+            if enc is not None:
+                if (enc.get("type") or "").startswith("image"):
+                    img = enc.get("url") or ""
+                elif (enc.get("type") or "").startswith("audio"):
+                    audio = enc.get("url") or ""
             if not img:
                 m = re.search(r'<img[^>]+src=["\']([^"\']+)', desc or "")
                 if m: img = m.group(1)
             snip = H.unescape(re.sub(r"<[^>]+>", " ", desc or ""))
             snip = re.sub(r"\s+", " ", snip).strip()[:200]
             out.append({"t": title[:140], "l": link, "s": src, "d": img,
+                        "audio": audio,
                         "b": snip,
                         "pub": _parse_pub(
                             gt("pubDate"),
@@ -387,6 +410,26 @@ def fetch_news(cat):
         NEWS_CACHE[cat] = {"t": time.time(), "items": uniq}
         return uniq
 
+def fetch_podcasts():
+    items, threads = [], []
+    for src, url in PODCAST_FEEDS:
+        t = threading.Thread(target=_feed_items, args=(src, url, items),
+                             daemon=True)
+        t.start()
+        threads.append(t)
+    for t in threads:
+        t.join(timeout=10)
+    seen, out = set(), []
+    for item in sorted(items, key=lambda x: x["pub"], reverse=True):
+        key = norm(item["t"])[:70]
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(item)
+        if len(out) >= 40:
+            break
+    return out
+
 # ---------------- MARKETS (Yahoo Finance public chart API) ----------------
 YF_HOSTS = ("query1", "query2")
 
@@ -412,6 +455,8 @@ def yf_chart(sym, range_="1d", interval="5m"):
                     "prev": meta.get("previousClose")
                             or meta.get("chartPreviousClose"),
                     "cur": meta.get("currency") or "",
+                    "exchangeName": meta.get("exchangeName") or
+                                    meta.get("fullExchangeName") or "",
                     "state": meta.get("marketState") or "",
                     "ts": (res.get("timestamp") or [])[-400:],
                     "cl": cl[-400:]}
@@ -528,6 +573,7 @@ header{position:sticky;top:0;background:var(--card);
  font-weight:700;white-space:nowrap}
 #mainnav button.on{background:linear-gradient(90deg,#fb923c,#f97316);
  color:#fff;border-color:transparent}
+#mainnav button[data-mode=radio].on{background:linear-gradient(90deg,#38bdf8,#0284c7)}
 .row1{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:8px}
 h1{font-size:19px;font-weight:800;background:linear-gradient(90deg,var(--acc),
  var(--acc2));-webkit-background-clip:text;background-clip:text;
@@ -681,6 +727,16 @@ body.playing #pbar{display:flex}
 body[data-mode=news] #panel-news{display:block}
 body[data-mode=markets] #panel-markets{display:block}
 body[data-mode=books] #panel-books{display:block}
+body[data-mode=podcasts] #panel-podcasts{display:block}
+.utilitygrid{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}
+.utilitygrid .hdrbtn{border:1px solid var(--line);border-radius:10px;padding:10px}
+.charttools{display:flex;gap:6px;flex-wrap:wrap;margin:8px 0}
+.charttools button.active{background:var(--acc);color:#fff}
+.podlist{display:flex;flex-direction:column;gap:10px}
+.podcard{display:flex;gap:12px;align-items:center;background:var(--card);
+ border:1px solid var(--line);border-radius:14px;padding:12px}
+.podcard img{width:64px;height:64px;object-fit:cover;border-radius:10px}
+.podcard .podtext{flex:1;min-width:0}
 .pchips{display:flex;gap:6px;overflow-x:auto;padding:4px 0 10px;
  -webkit-overflow-scrolling:touch}
 .pchips button{white-space:nowrap;border:1px solid var(--line);border-radius:16px;
@@ -797,6 +853,8 @@ body[data-mode=books] #panel-books{display:block}
  #tvplayer{min-height:150px;max-height:48vh}
  .playeractions{display:grid;grid-template-columns:1fr 1fr}
  .playeractions .big{min-width:0;padding:10px 6px}
+ .utilitygrid{grid-template-columns:1fr 1fr}
+ #guide,#set,#themebtn,#help{display:none}
  body.playing #toast{bottom:180px}
  body{padding-top:env(safe-area-inset-top)}
  .card:hover{transform:none}
@@ -805,8 +863,10 @@ body[data-mode=books] #panel-books{display:block}
 </style></head><body data-mode="media">
 <header>
  <div id="mainnav">
-  <button data-mode="media" class="on">&#128250; Media</button>
+  <button data-mode="tv">&#128250; TV</button>
+  <button data-mode="radio">&#127897; Radio</button>
   <button data-mode="news">&#128240; News</button>
+  <button data-mode="podcasts">&#127911; Podcasts</button>
   <button data-mode="markets">&#128200; Markets</button>
   <button data-mode="books">&#128218; Books</button>
  </div>
@@ -819,6 +879,7 @@ body[data-mode=books] #panel-books{display:block}
   <button class="hdrbtn" id="set" title="Settings">&#9881;</button>
   <button class="hdrbtn" id="themebtn" title="Theme">&#9788;</button>
   <button class="hdrbtn" id="help" title="Help / checks">&#10067;</button>
+  <button class="hdrbtn" id="more" title="More">&#8943;</button>
   <button class="hdrbtn" id="quit" title="Stop server">&#x23FB;</button></div>
  <div class="row2">
   <input id="q" placeholder="&#128269; Search channels or stations&hellip;"
@@ -861,6 +922,11 @@ body[data-mode=books] #panel-books{display:block}
   <button class="big grey" id="bkprev">&lsaquo; Prev</button>
   <span id="bkpage"></span>
   <button class="big grey" id="bknext">Next &rsaquo;</button></div>
+</div>
+<div class="panel" id="panel-podcasts">
+ <h3>Latest stories and podcasts</h3>
+ <p class="note">Listen to current episodes from public RSS feeds.</p>
+ <div id="podlist" class="podlist"><div class="pempty">Loading podcasts...</div></div>
 </div>
 
 <div id="loader"><div><div class="spin"></div>Loading&hellip;</div></div>
@@ -911,11 +977,28 @@ body[data-mode=books] #panel-books{display:block}
 <h3 id="playertitle">Watch stream</h3>
 <video id="tvplayer" controls playsinline preload="metadata"></video>
 <p id="playerhint">Choose where you want to play this stream.</p>
+<div class="charttools">
+ <label class="mini">Screen <select id="playerfit"><option value="contain">Fit</option>
+  <option value="cover">Fill</option></select></label>
+ <label class="mini">Speed <select id="playerspeed"><option>1</option>
+  <option>0.75</option><option>1.25</option><option>1.5</option></select></label>
+</div>
 <div class="playeractions">
  <button class="big blue" id="playerplay">Play here</button>
  <button class="big cy" id="playervlc">Open in VLC</button>
  <button class="big grey" id="playerexternal">Open in browser</button>
 </div>
+</div></div>
+
+<div class="modal" id="utilitypanel"><div class="modalcard">
+ <button class="closex" onclick="showModal('utilitypanel',false)">&times;</button>
+ <h3>More tools</h3>
+ <div class="utilitygrid">
+  <button class="hdrbtn" id="moreguide">&#128214; TV guide</button>
+  <button class="hdrbtn" id="moreset">&#9881; Settings</button>
+  <button class="hdrbtn" id="moretheme">&#9788; Theme</button>
+  <button class="hdrbtn" id="morehelp">&#10067; System checks</button>
+ </div>
 </div></div>
 
 <div class="modal" id="guidepanel"><div class="modalcard">
@@ -955,6 +1038,8 @@ body[data-mode=books] #panel-books{display:block}
  <button class="closex" onclick="showModal('chartmodal',false)">&times;</button>
  <h3 id="chartsym"></h3>
  <div id="chartpills" class="pchips"></div>
+ <div class="charttools"><button class="mini active" data-ct="line">Line</button>
+  <button class="mini" data-ct="bar">Bars</button></div>
  <div class="chartbox" id="bigchart"></div>
  <div id="chkstats" class="chkstats"></div>
 </div></div>
@@ -1012,23 +1097,26 @@ function plTypeOf(pl){
  return PL[pl]?PL[pl].t:'tv'}
 
 /* ===== MODE SWITCHER (media pipeline untouched) ===== */
-var MODE='media';
+var MODE='tv';
 function setMode(m){
  MODE=m;document.body.setAttribute('data-mode',m);
  var nb=document.querySelectorAll('#mainnav button');
  for(var i=0;i<nb.length;i++)
   nb[i].className=(nb[i].dataset.mode===m)?'on':'';
- var med=(m==='media');
+ var med=(m==='media'||m==='tv'||m==='radio');
  $('chips').style.display=med?'flex':'none';
  document.querySelector('.legend').style.display=med?'block':'none';
  document.querySelector('.note').style.display=med?'flex':'none';
  document.querySelector('.row2').style.display=med?'flex':'none';
  document.querySelector('.tabs').style.display=med?'flex':'none';
- $('guide').style.display=med?'':'none';
+ $('guide').style.display=(m==='tv'||m==='media')?'':'none';
  $('grid').style.display=med?'grid':'none';
  if(m==='news'&&!NEWS.loaded)nShow(NEWS.cat);
+ if(m==='podcasts'&&!POD.loaded)podShow();
  if(m==='markets'){mkPaint();mkStart()}else mkStop();
  if(m==='books'&&!BK.init)bInit();
+ if(m==='tv'&&S.pl!=='in')load('in');
+ if(m==='radio'&&S.pl!=='rin')load('rin');
 }
 window.setMode=setMode;
 
@@ -1306,10 +1394,11 @@ function urlparseForPlayer(u){
 function playerPlay(){
  var v=$('tvplayer');
  if(!PLAYER.url)return;
- v.src=PLAYER.url;v.play().catch(function(){
+ if(v.src!==PLAYER.url)v.src=PLAYER.url;
+ v.preload='auto';v.play().catch(function(){
   $('playerhint').textContent='Tap the play button if autoplay is blocked by your browser.'
  });
- $('playerhint').textContent='Playing in the phone browser.';
+ $('playerhint').textContent='Playing in the phone browser. Source quality is automatic.';
 }
 function openVlcMobile(){
  if(!PLAYER.url)return;
@@ -1331,6 +1420,17 @@ function openPlayer(it,u){
  showModal('playermodal',true);
  if(/^https?:/i.test(u))playerPlay();
 }
+$('tvplayer').addEventListener('waiting',function(){
+ $('playerhint').textContent='Buffering... keeping the stream ready.';
+});
+$('tvplayer').addEventListener('canplay',function(){
+ $('playerhint').textContent='Playing. Source quality is automatic.';
+});
+$('tvplayer').addEventListener('error',function(){
+ $('playerhint').textContent='Stream paused. Try Play here again or open VLC.';
+});
+$('playerfit').onchange=function(){$('tvplayer').style.objectFit=this.value};
+$('playerspeed').onchange=function(){$('tvplayer').playbackRate=parseFloat(this.value)};
 $('playerplay').onclick=playerPlay;
 $('playervlc').onclick=openVlcMobile;
 $('playerexternal').onclick=function(){
@@ -1385,7 +1485,8 @@ function openGuide(){
  .then(function(x){
   if(x.status==='loading'){$('gstat').textContent='Still loading...';
    setTimeout(openGuideRefresh,5000);return}
-  if(x.status!=='ready'){$('gstat').textContent='Guide unavailable: '+x.status;return}
+  if(x.status!=='ready'){$('gstat').innerHTML='Guide unavailable: '+
+   esc(x.status)+' <button class="mini" onclick="openGuide()">Retry</button>';return}
   S.now=x.channels||{};$('gstat').textContent='';paintNow();drawGuide()})
  .catch(function(){$('gstat').textContent='Could not reach server.'})}
 function openGuideRefresh(){
@@ -1395,7 +1496,8 @@ function openGuideRefresh(){
   if(x.status==='ready'){S.now=x.channels||{};
    $('gstat').textContent='';paintNow();drawGuide()}
   else if(x.status==='loading')setTimeout(openGuideRefresh,5000)
-  else $('gstat').textContent='Guide unavailable: '+x.status})}
+  else $('gstat').innerHTML='Guide unavailable: '+esc(x.status)+
+   ' <button class="mini" onclick="openGuide()">Retry</button>'})}
 function drawGuide(){
  var q=norm($('gsearch').value),rows=[],src=cur();
  for(var i=0;i<src.length;i++){
@@ -1479,6 +1581,25 @@ window.nOpen=nOpen;
  $('rvfp').onclick=function(){fs=Math.min(24,fs+1);ap();
   localStorage.setItem('srt-nfs',fs)}})();
 
+var POD={loaded:false};
+function podShow(){
+ $('podlist').innerHTML='<div class="pempty">Loading podcasts...</div>';
+ fetch('/api/podcasts').then(function(r){return r.json()})
+  .then(function(j){
+   POD.loaded=true;var h='',items=j.items||[];
+   for(var i=0;i<items.length;i++){var a=items[i];
+    h+='<article class="podcard">'+(a.d?'<img src="'+esc(a.d)+
+     '" loading="lazy" onerror="this.remove()">':'')+
+     '<div class="podtext"><b>'+esc(a.t)+'</b><div class="nimeta">'+
+     esc(a.s)+(a.pub?' &middot; '+agoT(a.pub):'')+'</div>'+
+     (a.b?'<p>'+esc(a.b)+'</p>':'')+'</div>'+
+     (a.audio?'<audio controls preload="none" src="'+esc(a.audio)+'"></audio>':'')+
+     (a.l?'<a class="big blue" target="_blank" rel="noopener" href="'+
+      esc(a.l)+'">Open</a>':'')+'</article>'}
+   $('podlist').innerHTML=h||'<div class="pempty">No podcast episodes available.</div>'})
+  .catch(function(){$('podlist').innerHTML=
+   '<div class="pempty">Could not load podcasts. Try again later.</div>'})}
+
 /* ================= MARKETS PANEL ================= */
 var MKT={timer:null,rows:null,watch:[]};
 try{MKT.watch=JSON.parse(localStorage.getItem('srt-watch')||'null')||[]}
@@ -1510,6 +1631,16 @@ function sparkV(vals,w,h){
    (h-3-((vals[i]-mn)/rng)*(h-6)).toFixed(1))}
  return'<svg width="'+w+'" height="'+h+'"><polyline fill="none" stroke="'+
   col+'" stroke-width="2" points="'+pts.join(' ')+'"/></svg>'}
+function barV(vals,w,h){
+ if(!vals||vals.length<2)return'';
+ var mn=Math.min.apply(null,vals),mx=Math.max.apply(null,vals),rng=(mx-mn)||1;
+ var step=w/vals.length,b='';
+ for(var i=0;i<vals.length;i++){
+  var bh=Math.max(2,((vals[i]-mn)/rng)*(h-8));
+  b+='<rect x="'+(i*step).toFixed(1)+'" y="'+(h-bh).toFixed(1)+
+  '" width="'+Math.max(1,step-1).toFixed(1)+'" height="'+bh.toFixed(1)+
+  '" fill="'+(vals[i]>=vals[0]?'#16a34a':'#dc2626')+'"/>'}
+ return'<svg width="'+w+'" height="'+h+'">'+b+'</svg>'}
 function mkRow(q,label,canRm){
  var live=q.state==='REGULAR'||q.state==='OPEN';
  return'<div class="mkrow" data-sym="'+esc(q.sym)+'">'+
@@ -1593,7 +1724,7 @@ function mkNews(){
 /* chart modal */
 var CR={'1D':['1d','5m'],'5D':['5d','15m'],'1M':['1mo','60m'],
  '6M':['6mo','1d'],'1Y':['1y','1d']};
-var CS={sym:null,range:'1M'};
+var CS={sym:null,range:'1M',type:'line'};
 function openChart(sym){
  CS.sym=sym;CS.range='1M';
  $('chartsym').textContent=sym;
@@ -1607,6 +1738,9 @@ function loadChart(){
  var pb=$('chartpills').querySelectorAll('button');
  for(var i=0;i<pb.length;i++)pb[i].onclick=function(){
   CS.range=this.dataset.r;loadChart()};
+ document.querySelectorAll('[data-ct]').forEach(function(b){
+  b.className='mini '+(b.dataset.ct===CS.type?'active':'');
+  b.onclick=function(){CS.type=this.dataset.ct;loadChart()}});
  $('bigchart').innerHTML='<div class="pempty">Loading&#8230;</div>';
  $('chkstats').textContent='';
  fetch('/api/mchart?sym='+encodeURIComponent(CS.sym)+
@@ -1616,12 +1750,14 @@ function loadChart(){
   var cl=j.cl||[];
   if(cl.length<2){$('bigchart').innerHTML=
    '<div class="pempty">No chart data</div>';return}
-  $('bigchart').innerHTML=sparkV(cl,560,220);
+  $('bigchart').innerHTML=CS.type==='bar'?barV(cl,560,220):sparkV(cl,560,220);
   var lo=Math.min.apply(null,cl),hi=Math.max.apply(null,cl);
   $('chkstats').innerHTML='<b>'+money(j.price,j.cur)+'</b>'+
    chgHtml(j.price,j.prev)+'<span>low '+money(lo,j.cur)+'</span>'+
    '<span>high '+money(hi,j.cur)+'</span>'+
-   (j.state?'<span>'+esc(j.state)+'</span>':'')})
+   (j.state?'<span>'+esc(j.state)+'</span>':'')+
+   (j.name?'<span>'+esc(j.name)+'</span>':'')+
+   (j.exchangeName?'<span>'+esc(j.exchangeName)+'</span>':'')})
  .catch(function(){$('bigchart').innerHTML=
   '<div class="pempty">Failed to load</div>'})}
 
@@ -1783,7 +1919,7 @@ function maybeWelcome(){
  if(!localStorage.getItem('iptv-welcomed')){
   showModal('welcome',true);runChecks()}}
 $('help').onclick=function(){runChecks();showModal('welcome',true)};
-$('home').onclick=function(){setMode('media');load('in');
+$('home').onclick=function(){setMode('tv');load('in');
  window.scrollTo(0,0)};
 
 /* ===== LOAD SOURCE (media) ===== */
@@ -1845,6 +1981,11 @@ $('okfirst').addEventListener('change',function(){render(true)});
 $('mob').onclick=function(){showModal('mobpanel',true)};
 $('set').onclick=function(){showModal('setpanel',true)};
 $('guide').onclick=openGuide;
+$('more').onclick=function(){showModal('utilitypanel',true)};
+$('moreguide').onclick=function(){showModal('utilitypanel',false);openGuide()};
+$('moreset').onclick=function(){showModal('utilitypanel',false);showModal('setpanel',true)};
+$('moretheme').onclick=function(){showModal('utilitypanel',false);$('themebtn').click()};
+$('morehelp').onclick=function(){showModal('utilitypanel',false);runChecks();showModal('welcome',true)};
 $('playall').onclick=function(){
  if(S.pl==='favs'||S.pl==='recent')return;
  if(ISMOBILE&&!confirm('Play this list on the PC?'))return;
@@ -1866,7 +2007,7 @@ new IntersectionObserver(function(es){es.forEach(function(e){
   '" href="/m3u?p='+k+'">&#11015; '+plain(PL[k].n)+' (.m3u)</a>';
  $('mlinks').innerHTML=h;
 })();
-window.load=load;load('in');maybeWelcome();
+window.load=load;load('in');setMode('tv');maybeWelcome();
 </script></body></html>"""
 
 class Handler(BaseHTTPRequestHandler):
@@ -1941,6 +2082,15 @@ class Handler(BaseHTTPRequestHandler):
                                            "items": items},
                                           ensure_ascii=True),
                           "application/json")
+            except Exception as e:
+                self.send(502, json.dumps({"error": str(e)[:80]}),
+                          "application/json")
+
+        elif u.path == "/api/podcasts":
+            try:
+                items = fetch_podcasts()
+                self.send(200, json.dumps({"count": len(items), "items": items},
+                                          ensure_ascii=True), "application/json")
             except Exception as e:
                 self.send(502, json.dumps({"error": str(e)[:80]}),
                           "application/json")
