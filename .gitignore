@@ -1,0 +1,25 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+iptv_dashboard.log
+iptv_dashboard.log
+custom_playlists.json
+*.log
+.DS_Store
+
+
+# OS junk
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# Editor folders
+.vscode/
+.idea/
+
+# Large outputs / temp files (adjust to your project)
+*.tmp
+*.log
+output/
+node_modules/
