@@ -1007,8 +1007,15 @@ body[data-mode=podcasts] #panel-podcasts{display:block}
 .podlist{display:flex;flex-direction:column;gap:10px}
 .podcard{display:flex;gap:12px;align-items:center;background:var(--card);
  border:1px solid var(--line);border-radius:14px;padding:12px}
-.podcard img{width:64px;height:64px;object-fit:cover;border-radius:10px}
-.podcard .podtext{flex:1;min-width:0}
+.podcard img{width:64px;height:64px;object-fit:cover;border-radius:10px;flex:0 0 auto}
+.podtext{min-width:0;text-align:justify}
+.podtext b,.podtext p{display:block;text-align:justify}
+.podtext .nimeta{text-align:left}
+@media(max-width:600px){
+.podcard{flex-direction:column;align-items:flex-start}
+.podcard img{width:48px;height:48px}
+.podtext{width:100%}
+}
 .pchips{display:flex;gap:6px;overflow-x:auto;padding:4px 0 10px;
  -webkit-overflow-scrolling:touch}
 .pchips button{white-space:nowrap;border:1px solid var(--line);border-radius:16px;
@@ -1132,6 +1139,9 @@ body[data-mode=podcasts] #panel-podcasts{display:block}
  .card:hover{transform:none}
  .ni:hover,.mkrow:hover{transform:none}
 }
+.podtext p{margin:0;}
+.podsource{margin:10px 0;}
+.podsource h4{margin:0 0 5px 0;color:var(--acc);}
 </style></head><body data-mode="media">
 <header>
  <div id="mainnav">
@@ -1199,6 +1209,7 @@ body[data-mode=podcasts] #panel-podcasts{display:block}
 <div class="panel" id="panel-podcasts">
  <h3>Latest stories and podcasts</h3>
  <p class="note">Live episodes from public RSS feeds, including Hindi stories from Gubbaare.</p>
+ <select id="podsrc"></select>
  <div id="podfeeds" class="charttools"></div>
  <div class="pbar2"><input id="podq" placeholder="Filter stories or shows…" autocomplete="off">
   <button class="big blue" id="podrefresh">Refresh</button></div>
@@ -1454,30 +1465,41 @@ function radioConnect(it){
   var pr=AU.play();
   if(pr&&pr.catch)pr.catch(function(){pbSet('Tap PLAY to start',false)})};
  clearTimeout(PB.timer);PB.timer=setTimeout(go,7200);
- AU.onplaying=function(){PB.tries=0;pbSet('\\u266A LIVE - on air',true)};
+ AU.onplaying=function(){PB.tries=0;PB.lastT=-1;PB.stall=0;pbSet('\\u266A LIVE - on air',true)};
  AU.onpause=function(){$('pbplay').innerHTML='\\u25B6'};
- AU.onended=function(){pbRetry('stream ended')};
- AU.onerror=function(){pbRetry('connection dropped')};
+ // Live streams often fire a synthetic 'ended' event in browsers; ignore it
+ // unless the user actually paused us. Only react to real errors.
+ AU.onended=function(){if(!PB.on||AU.paused||!PB.cur)return;};
+ AU.onerror=function(){if(!PB.on||!PB.cur)return;pbRetry('connection dropped')};
+ AU.onstalled=function(){/* ignore - browser stalls on rebuffer are normal */};
+ AU.onwaiting=function(){/* ignore - live streams wait when buffer drains */};
  PB.lastT=-1;PB.stall=0;clearInterval(PB.wd);
  PB.wd=setInterval(function(){
   if(!PB.on||PB.cur!==it||AU.paused)return;
   var ct=AU.currentTime||0;
-  if(Math.abs(ct-PB.lastT)<0.05){PB.stall++;
-   if(PB.stall>=3){PB.stall=0;pbRetry('stalled')}}
-  else PB.stall=0;
+  // For live streams, currentTime can stay pinned; require a long stall
+  // and only count it as a stall if the buffer has actually been drained.
+  if(Math.abs(ct-PB.lastT)<0.05){
+   var b=AU.buffered,end=b.length?b.end(b.length-1):0;
+   var ahead=Math.max(0,end-(AU.currentTime||0));
+   if(ahead<0.5){PB.stall++;
+    if(PB.stall>=8){PB.stall=0;pbRetry('stalled')}}
+   else PB.stall=0;
+  } else PB.stall=0;
   PB.lastT=ct},4000)}
 function pbRetry(reason){
  if(!PB.cur)return;
  PB.tries++;
- if(PB.tries===2&&!PB.vlcTried){PB.vlcTried=true;
+ // Offer VLC handoff only after several retries, not on first failure
+ if(PB.tries>=3&&!PB.vlcTried){PB.vlcTried=true;
   var u=PB.cur.u,nm=plain(esc(PB.cur.n)).slice(0,28);
-  toast('Browser struggling - switching to VLC','bad');
-  fetch('/play?url='+encodeURIComponent(u)).then(function(r){return r.json()})
-  .then(function(j){if(j.ok)toast(nm+' playing in VLC','ok')});
-  radioStop();return}
- if(PB.tries>4){radioStop('Station not responding ('+reason+')');return}
- pbSet('Reconnecting '+PB.tries+'/4...',true);
- var it=PB.cur,delay=Math.min(4000,600*PB.tries);
+  toast('Browser struggling - tap VLC button to switch','bad');
+  // Don't auto-stop: keep the player visible so the user can still retry
+  // or manually invoke VLC. The normal retry cycle continues.
+ }
+ if(PB.tries>6){radioStop('Station not responding ('+reason+')');return}
+ pbSet('Reconnecting '+PB.tries+'/6...',true);
+ var it=PB.cur,delay=Math.min(5000,800*PB.tries);
  setTimeout(function(){if(PB.cur===it)radioConnect(it)},delay)}
 function radioPlay(it){
  if(/\\.m3u8/i.test(it.u)){
@@ -1872,6 +1894,9 @@ window.nOpen=nOpen;
   localStorage.setItem('srt-nfs',fs)}})();
 
 var POD={loaded:false};
+var POD_SRC = '';
+function podPopulateSrc(){var h='<option value=\"\">All</option>';PODCAST_FEEDS.forEach(function(a){var sel=(a[0]===POD_SRC)?' selected=\"selected\"':'';h+='<option value=\"'+a[0]+'\"'+sel+'>'+esc(a[0])+'</option>'});$('podsrc').innerHTML=h;}
+$('podsrc').onchange=function(){POD_SRC=this.value;podPaint();};
 function podShow(){
  $('podlist').innerHTML='<div class="pempty">Loading podcasts...</div>';
  fetch('/api/podcasts').then(function(r){return r.json()})
@@ -1882,23 +1907,41 @@ function podShow(){
     links+='<a class="big" target="_blank" rel="noopener" href="'+esc(a.url)+
      '">'+esc(a.name)+'</a>'});
    $('podfeeds').innerHTML='<span class="note">Discover more:</span>'+links;
+   podPopulateSrc();
    podPaint();
    })
    .catch(function(){$('podlist').innerHTML=
    '<div class="pempty">Could not load podcasts. <button class="big" onclick="podShow()">Retry</button></div>'})}
  function podPaint(){
-   var h='',q=($('podq').value||'').toLowerCase(),items=POD.items||[];
-   for(var i=0;i<items.length;i++){var a=items[i];
-    if(q&&(a.t+' '+a.s+' '+(a.b||'')).toLowerCase().indexOf(q)<0)continue;
-    h+='<article class="podcard">'+(a.d?'<img src="'+esc(a.d)+
-     '" loading="lazy" onerror="this.remove()">':'')+
-     '<div class="podtext"><b>'+esc(a.t)+'</b><div class="nimeta">'+
-     esc(a.s)+(a.pub?' &middot; '+agoT(a.pub):'')+'</div>'+
-     (a.b?'<p>'+esc(a.b)+'</p>':'')+'</div>'+
-     (a.audio?'<audio controls preload="none" src="'+esc(a.audio)+'"></audio>':'')+
-     (a.l?'<a class="big blue" target="_blank" rel="noopener" href="'+
-      esc(a.l)+'">Open</a>':'')+'</article>'}
-   $('podlist').innerHTML=h||'<div class="pempty">No matching episodes.</div>'}
+   var q=($('podq').value||'').toLowerCase(),
+       items=POD.items||[],
+       grouped={};
+   for(var i=0;i<items.length;i++){
+     var a=items[i];
+     if(q&&(a.t+' '+a.s+' '+(a.b||'')).toLowerCase().indexOf(q)<0)continue;
+     if(POD_SRC && a.s !== POD_SRC)continue;
+     if(!grouped[a.s]) grouped[a.s]=[];
+     grouped[a.s].push(a);
+   }
+   var h='';
+   for(var source in grouped){
+     if(!grouped.hasOwnProperty(source))continue;
+     h+='<div class="podsource"><h4>'+esc(source)+'</h4>';
+     for(var j=0;j<grouped[source].length;j++){
+       var a=grouped[source][j];
+       h+='<article class="podcard">'+(a.d?'<img src="'+esc(a.d)+
+          '" loading="lazy" onerror="this.remove()">':'')+
+          '<div class="podtext"><b>'+esc(a.t)+'</b><div class="nimeta">'+
+          esc(a.s)+(a.pub?' &middot; '+agoT(a.pub):'')+'</div>'+
+          (a.b?'<p>'+esc(a.b)+'</p>':'')+'</div>'+
+          (a.audio?'<audio controls preload="none" src="'+esc(a.audio)+'"></audio>':'')+
+          (a.l?'<a class="big blue" target="_blank" rel="noopener" href="'+
+           esc(a.l)+'">Open</a>':'')+'</article>';
+     }
+     h+='</div>';
+   }
+   $('podlist').innerHTML=h||'<div class="pempty">No matching episodes.</div>';
+ }
  $('podq').addEventListener('input',podPaint);
  $('podrefresh').onclick=function(){POD.loaded=false;podShow()};
 
