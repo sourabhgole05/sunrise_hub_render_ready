@@ -62,11 +62,40 @@ BASE_PLAYLISTS = {
               "url": "https://iptv-org.github.io/iptv/index.m3u"},
 }
 PODCAST_FEEDS = [
-    ("BBC World Service", "https://podcasts.files.bbci.co.uk/p02nq0gn.rss"),
-    ("NPR News Now", "https://feeds.npr.org/500005/podcast.xml"),
-    ("The Hindu Podcast", "https://www.thehindu.com/podcast/feeder/default.rss"),
-    ("Gubbaare (Hindi stories)", "https://rss.buzzsprout.com/1280120.rss"),
+    ("BBC World Service", "https://podcasts.files.bbci.co.uk/p02nq0gn.rss", "en", "news"),
+    ("NPR News Now", "https://feeds.npr.org/500005/podcast.xml", "en", "news"),
+    ("The Hindu Podcast", "https://www.thehindu.com/podcast/feeder/default.rss", "en", "news"),
+    ("Gubbaare (Hindi stories)", "https://rss.buzzsprout.com/1280120.rss", "hi", "stories"),
+    ("BBC Hindi", "https://feeds.bbci.co.uk/hindi/rss.xml", "hi", "news"),
+    ("All India Radio Hindi", "https://podcastrss.air.com/rss/hi/latest", "hi", "news"),
+    ("News18 Hindi Podcast", "https://www.news18.com/hindi/rss/podcasts-rss1.xml", "hi", "news"),
+    ("Dainik Jagran Podcast", "https://www.jagran.com/rss/podcast.xml", "hi", "news"),
+    ("Amar Ujala Podcast", "https://www.amarujala.com/rss/podcast.xml", "hi", "news"),
+    ("Radio Mirchi Podcasts", "https://www.radiomirchi.com/rss/podcast.xml", "hi", "entertainment"),
 ]
+# PODCAST_DIRECTORIES now holds actual RSS feed URLs grouped by category
+PODCAST_DIRECTORY_FEEDS = {
+    "hindi_news": [
+        ("BBC Hindi", "https://feeds.bbci.co.uk/hindi/rss.xml"),
+        ("News18 Hindi", "https://www.news18.com/hindi/rss/podcasts-rss1.xml"),
+        ("Dainik Jagran", "https://www.jagran.com/rss/podcast.xml"),
+        ("Amar Ujala", "https://www.amarujala.com/rss/podcast.xml"),
+    ],
+    "hindi_stories": [
+        ("Gubbaare", "https://rss.buzzsprout.com/1280120.rss"),
+        ("Kahani", "https://rss.buzzsprout.com/1781883.rss"),
+    ],
+    "hindi_entertainment": [
+        ("Radio Mirchi", "https://www.radiomirchi.com/rss/podcast.xml"),
+        ("Red FM", "https://www.redfm.in/rss/podcast.xml"),
+    ],
+    "english_news": [
+        ("BBC World Service", "https://podcasts.files.bbci.co.uk/p02nq0gn.rss"),
+        ("NPR News Now", "https://feeds.npr.org/500005/podcast.xml"),
+        ("The Hindu", "https://www.thehindu.com/podcast/feeder/default.rss"),
+    ],
+}
+# Legacy directories for backward compat (not used for fetching)
 PODCAST_DIRECTORIES = [
     ("Radio India Podcasts", "https://www.radioindia.in/podcasts",
      "Indian podcasts by language and genre"),
@@ -558,11 +587,19 @@ def fetch_news(cat):
 
 def fetch_podcasts():
     items, threads = [], []
-    for src, url in PODCAST_FEEDS:
+    # Fetch from main feeds
+    for src, url, _lang, _cat in PODCAST_FEEDS:
         t = threading.Thread(target=_feed_items, args=(src, url, items),
                              daemon=True)
         t.start()
         threads.append(t)
+    # Also fetch from directory feeds with category metadata
+    for cat_name, feeds in PODCAST_DIRECTORY_FEEDS.items():
+        for src, url in feeds:
+            t = threading.Thread(target=_feed_items, args=(src, url, items),
+                                 daemon=True)
+            t.start()
+            threads.append(t)
     for t in threads:
         t.join(timeout=15)
     seen, out = set(), []
@@ -572,14 +609,26 @@ def fetch_podcasts():
             continue
         seen.add(key)
         out.append(item)
+    # Add category/language metadata based on source
+    src_meta = {src: (lang, cat) for src, _url, lang, cat in PODCAST_FEEDS}
+    for cat_name, feeds in PODCAST_DIRECTORY_FEEDS.items():
+        for src, _url in feeds:
+            if src not in src_meta:
+                # Derive language from category name
+                lang = "hi" if cat_name.startswith("hindi") else "en"
+                src_meta[src] = (lang, cat_name)
+    for item in out:
+        if item["s"] in src_meta:
+            item["lang"] = src_meta[item["s"]][0]
+            item["cat"] = src_meta[item["s"]][1]
     # Keep every configured show represented instead of letting one busy feed
     # crowd the Hindi and Indian sources out of the first page.
     preferred = []
-    for src, _url in PODCAST_FEEDS:
+    for src, _url, _lang, _cat in PODCAST_FEEDS:
         preferred.extend([item for item in out if item["s"] == src][:20])
     preferred_keys = {norm(item["t"])[:70] for item in preferred}
     preferred.extend(item for item in out if norm(item["t"])[:70] not in preferred_keys)
-    return preferred[:80]
+    return preferred[:100]
 
 def fetch_market_news_feed():
     url = "https://feeds.finance.yahoo.com/rss/2.0/headline?s=%5ENSEI&region=IN&lang=en-IN"
@@ -1139,6 +1188,16 @@ body[data-mode=podcasts] #panel-podcasts{display:block}
  .card:hover{transform:none}
  .ni:hover,.mkrow:hover{transform:none}
 }
+@media(max-width:600px){
+ .podcard{flex-direction:column;align-items:flex-start}
+ .podcard img{width:48px;height:48px}
+ .podtext{width:100%;padding-left:8px}
+ .podlist{grid-template-columns:1fr;padding:12px 8px}
+ .podq{width:100%;min-width:0;order:-1}
+ .podsrc{width:100%;font-size:12px}
+ .podfeeds{display:none}
+ .podchips button{padding:4px 8px;font-size:11px}
+}
 .podtext p{margin:0;}
 .podsource{margin:10px 0;}
 .podsource h4{margin:0 0 5px 0;color:var(--acc);}
@@ -1209,6 +1268,7 @@ body[data-mode=podcasts] #panel-podcasts{display:block}
 <div class="panel" id="panel-podcasts">
  <h3>Latest stories and podcasts</h3>
  <p class="note">Live episodes from public RSS feeds, including Hindi stories from Gubbaare.</p>
+ <div class="pchips" id="podchips"></div>
  <select id="podsrc"></select>
  <div id="podfeeds" class="charttools"></div>
  <div class="pbar2"><input id="podq" placeholder="Filter stories or shows…" autocomplete="off">
@@ -1895,19 +1955,49 @@ window.nOpen=nOpen;
 
 var POD={loaded:false};
 var POD_SRC = '';
-function podPopulateSrc(){var h='<option value=\"\">All</option>';PODCAST_FEEDS.forEach(function(a){var sel=(a[0]===POD_SRC)?' selected=\"selected\"':'';h+='<option value=\"'+a[0]+'\"'+sel+'>'+esc(a[0])+'</option>'});$('podsrc').innerHTML=h;}
+function podPopulateSrc(){var h='<option value=\"\">All</option>';PODCAST_FEEDS.forEach(function(a){var sel=(a[0]===POD_SRC)?' selected=\"selected\"':'';h+='<option value=\"'+a[0]+'\"'+sel+'>'+esc(a[0])+'</option>'});
+ // Add directory categories as filter options
+ for(var cat in PODCAST_DIRECTORY_FEEDS){var name=cat.replace(/_/g,' ').replace(/\b\w/g,function(l){return l.toUpperCase()});
+  h+='<option value=\"dir:'+cat+'\"'+((POD_SRC==='dir:'+cat)?' selected=\"selected\"':'')+'>'+esc(name)+' feeds</option>';}
+ $('podsrc').innerHTML=h;}
 $('podsrc').onchange=function(){POD_SRC=this.value;podPaint();};
+function podPopulateChips(){
+ var h='<button data-fc="all" class="active">All</button>';
+ h+='<button data-fc="hindi">Hindi</button>';
+ h+='<button data-fc="en">English</button>';
+ h+='<button data-fc="news">News</button>';
+ h+='<button data-fc="stories">Stories</button>';
+ h+='<button data-fc="entertainment">Entertainment</button>';
+ $('podchips').innerHTML=h;}
+$('podchips').onclick=function(e){
+ var b=e.target.closest('button');if(!b)return;
+ var fc=b.dataset.fc;
+ $('podchips').querySelectorAll('button').forEach(function(x){x.classList.remove('active')});
+ b.classList.add('active');
+ if(fc==='all'){POD_SRC='';podPopulateSrc();}
+ else if(['hindi','en'].indexOf(fc)>=0){POD_SRC='lang:'+fc;}
+ else{POD_SRC='dir:'+fc;}
+ podPaint();};
 function podShow(){
  $('podlist').innerHTML='<div class="pempty">Loading podcasts...</div>';
  fetch('/api/podcasts').then(function(r){return r.json()})
   .then(function(j){
    POD.loaded=true;POD.items=j.items||[];
+   // Initialize chips and src select
+   podPopulateChips();
+   podPopulateSrc();
+   // Build discover links including directory feeds
    var links='';
    (j.directories||[]).forEach(function(a){
     links+='<a class="big" target="_blank" rel="noopener" href="'+esc(a.url)+
      '">'+esc(a.name)+'</a>'});
+   if(j.directory_feeds&&j.directory_feeds.length>0){
+    links+='<span class="note">Directory feeds:</span>';
+    j.directory_feeds.forEach(function(a){
+     links+='<a class="mini" target="_blank" rel="noopener" href="'+esc(a.url)+'">'+esc(a.name)+' ('+esc(a.category)+')</a> ';});}
    $('podfeeds').innerHTML='<span class="note">Discover more:</span>'+links;
-   podPopulateSrc();
+   // Reset filter state
+   POD_SRC='';
    podPaint();
    })
    .catch(function(){$('podlist').innerHTML=
@@ -1916,10 +2006,24 @@ function podShow(){
    var q=($('podq').value||'').toLowerCase(),
        items=POD.items||[],
        grouped={};
+   // Extract filter from POD_SRC (could be "source_name" or "dir:category")
+   var filterType = 'source', filterVal = POD_SRC;
+   if(POD_SRC && POD_SRC.indexOf('dir:') === 0){
+     filterType = 'dir'; filterVal = POD_SRC.substring(4);
+   }
    for(var i=0;i<items.length;i++){
      var a=items[i];
      if(q&&(a.t+' '+a.s+' '+(a.b||'')).toLowerCase().indexOf(q)<0)continue;
-     if(POD_SRC && a.s !== POD_SRC)continue;
+     // Filter by source or directory category/language
+     if(POD_SRC){
+       if(filterType === 'source' && a.s !== filterVal)continue;
+       if(filterType === 'dir'){
+         // Filter by directory category or language
+         var itemCat = a.cat || '';
+         var itemLang = a.lang || '';
+         if(itemCat !== filterVal && itemLang !== filterVal)continue;
+       }
+     }
      if(!grouped[a.s]) grouped[a.s]=[];
      grouped[a.s].push(a);
    }
@@ -2522,11 +2626,16 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 items = fetch_podcasts()
                 self.send(200, json.dumps({"count": len(items), "items": items,
-                                          "feeds": [{"name": n, "url": url}
-                                                    for n, url in PODCAST_FEEDS],
+                                          "feeds": [{"name": n, "url": url,
+                                                     "lang": lang, "cat": cat}
+                                                    for n, url, lang, cat in PODCAST_FEEDS],
                                           "directories": [
                                               {"name": n, "url": url, "description": d}
-                                              for n, url, d in PODCAST_DIRECTORIES]},
+                                              for n, url, d in PODCAST_DIRECTORIES],
+                                          "directory_feeds": [
+                                              {"name": n, "url": url, "category": cat}
+                                              for cat, feeds in PODCAST_DIRECTORY_FEEDS.items()
+                                              for n, url in feeds]},
                                           ensure_ascii=True), "application/json")
             except Exception as e:
                 self.send(502, json.dumps({"error": str(e)[:80]}),
