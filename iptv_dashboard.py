@@ -1060,6 +1060,48 @@ body[data-mode=podcasts] #panel-podcasts{display:block}
 .podtext{min-width:0;text-align:justify}
 .podtext b,.podtext p{display:block;text-align:justify}
 .podtext .nimeta{text-align:left}
+/* ===== SPA HOME DASHBOARD ===== */
+.spa-home{padding:0;max-width:1200px;margin:0 auto}
+.spa-hero{background:linear-gradient(135deg,var(--acc),var(--acc2));
+ color:#fff;padding:24px 20px;border-radius:16px;margin-bottom:20px;
+ display:flex;align-items:center;gap:20px}
+.spa-hero h2{font-size:22px;margin:0 0 4px}
+.spa-hero p{margin:0;opacity:.9;font-size:14px}
+.spa-section{margin-bottom:20px}
+.spa-section h3{font-size:16px;font-weight:800;margin:0 0 10px;
+ color:var(--txt);display:flex;align-items:center;gap:8px}
+.spa-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));
+ gap:12px}
+.spa-card{background:var(--card);border:1px solid var(--line);
+ border-radius:14px;padding:16px;cursor:pointer;transition:.15s;
+ display:flex;flex-direction:column;gap:6px}
+.spa-card:hover{border-color:var(--acc);transform:translateY(-2px);
+ box-shadow:0 4px 16px rgba(0,0,0,.15)}
+.spa-icon{font-size:28px}
+.spa-title{font-size:14px;font-weight:700;color:var(--txt);line-height:1.3}
+.spa-sub{font-size:12px;color:var(--mut)}
+.spa-card.live{border-color:#ef4444;background:linear-gradient(135deg,#1a1a2e,#16213e)}
+.spa-card.live .spa-title{color:#fff}
+.spa-card.live .spa-sub{color:#f87171}
+.spa-sections{display:flex;flex-direction:column;gap:4px}
+@media(max-width:600px){
+ .spa-hero{padding:18px 14px;flex-direction:column;text-align:center}
+ .spa-cards{grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:8px}
+ .spa-card{padding:12px}
+ .spa-icon{font-size:24px}
+ .spa-title{font-size:13px}
+}
+/* Favorite and continue indicators */
+.nifav{cursor:pointer;font-size:16px;padding:4px;opacity:.6;transition:.1s}
+.nifav:hover{opacity:1;transform:scale(1.2)}
+.conti{color:#16a34a;font-size:12px;margin-left:6px}
+/* Books */
+.bifav{cursor:pointer;font-size:16px;padding:4px;opacity:.6;transition:.1s}
+.bifav:hover{opacity:1;transform:scale(1.2)}
+.podfav{cursor:pointer;font-size:16px;padding:4px;opacity:.6;transition:.1s}
+.podfav:hover{opacity:1;transform:scale(1.2)}
+.mkfav{cursor:pointer;font-size:16px;padding:4px;opacity:.6;transition:.1s}
+.mkfav:hover{opacity:1;transform:scale(1.2)}
 @media(max-width:600px){
 .podcard{flex-direction:column;align-items:flex-start}
 .podcard img{width:48px;height:48px}
@@ -1212,7 +1254,7 @@ body[data-mode=podcasts] #panel-podcasts{display:block}
   <button data-mode="books">&#128218; Books</button>
  </div>
  <div class="row1">
-  <button class="hdrbtn" id="home" title="Home">&#x1F3E0;</button>
+  <button class="hdrbtn" id="home" title="Home" onclick="navigateTo('home')">&#x1F3E0;</button>
   <h1>Sg_ent_media_radio</h1>
   <div class="tabs" id="tabs"></div>
   <button class="hdrbtn" id="guide" title="TV Guide">&#128214;</button>
@@ -1225,7 +1267,7 @@ body[data-mode=podcasts] #panel-podcasts{display:block}
   <button class="hdrbtn" id="quit" title="Stop server">&#x23FB;</button></div>
  <div class="row2">
   <input id="q" placeholder="&#128269; Search channels or stations&hellip;"
-   autocomplete="off">
+   autocomplete="off" oninput="showGlobalSearch()">
   <button class="big" id="playall">&#9654; Whole list in VLC</button>
   <label class="tog"><input type="checkbox" id="auto" checked> auto-check</label>
   <label class="tog"><input type="checkbox" id="okfirst"> online first</label>
@@ -1290,6 +1332,9 @@ body[data-mode=podcasts] #panel-podcasts{display:block}
   <option value="0">sleep: off</option><option value="15">15 min</option>
   <option value="30">30 min</option><option value="60">60 min</option></select>
  <button id="pbvlc" class="vlc" title="Hand off to VLC (most stable)">VLC</button>
+ <button id="pbfav" title="Add to favorites" aria-label="favorite">&#9733;</button>
+ <button id="pbnext" title="Next in queue" aria-label="next">&#9654;&#9654;</button>
+ <button id="pbqueue" title="Show queue" aria-label="queue">&#9656;</button>
  <button id="pbstop" aria-label="stop">&#10005;</button>
 </div>
 
@@ -1411,13 +1456,29 @@ body[data-mode=podcasts] #panel-podcasts{display:block}
 var PL=__PL__;
 var T_FAV='\\u2605 Favorites',T_REC='\\u23F0 Recent';
 var ISMOBILE=/Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
- var IS_CLOUD=__CLOUD__;
+var IS_CLOUD=__CLOUD__;
 var CHUNK=ISMOBILE?60:120,CONC=ISMOBILE?3:4,MAXAUTO=ISMOBILE?80:240,
  TTL=20*60*1000;
 var S={pl:'in',chans:[],cat:'all',q:'',shown:0,queue:[],busy:0,autoN:0,
  now:{},cache:{}};
 S.favs=JSON.parse(localStorage.getItem('iptv-favs')||'[]');
 S.hist=JSON.parse(localStorage.getItem('iptv-hist')||'[]');
+// NEW: Universal personalization state (single source-of-truth)
+S.universal=(function(){
+ try{
+  var u=JSON.parse(localStorage.getItem('iptv-universal')||'{}');
+  // Normalize missing keys for backward compatibility
+  u.favorites=u.favorites||{}; u.history=u.history||[]; u.continueItems=u.continueItems||[];
+  u.preferences=u.preferences||{}; u.quickActions=u.quickActions||[];
+  return u;
+ }catch(e){ return {favorites:{},history:[],continueItems:[],preferences:{},quickActions:[]}};
+})();
+function $u(k,def){return S.universal[k]!==undefined?S.universal[k]:def;}
+function $uS(k,v){try{localStorage.setItem('iptv-universal',JSON.stringify(S.universal));}catch(e){}}
+// Persist changes to localStorage immediately
+(function(){
+ var u=S.universal; if(u.changed){$uS(); u.changed=false;}
+})();
 S.chk=(function(){try{
  var c=JSON.parse(localStorage.getItem('iptv-chk')||'{}');
  var cut=Date.now()-TTL*4,o={};
@@ -1435,6 +1496,173 @@ function plain(s){return String(s).replace(/&[#\\w]+;/g,'')}
 function isTV(pl){return PL[pl]&&PL[pl].t!=='radio'}
 function showModal(id,on){$(id).className=on?'modal open':'modal'}
 window.showModal=showModal;
+
+// ============================================================
+// UNIVERSAL PERSONALIZATION SYSTEM (reusable across all modules)
+// ============================================================
+var PS={
+ getFavorites:function(cat){
+  var f=$u('favorites',{});
+  if(!cat)return f;
+  return f[cat]||[];
+ },
+ toggleFavorite:function(cat,item){
+  var f=$u('favorites',{});
+  if(!f[cat])f[cat]=[];
+  var key=item.t||item.n||'';
+  var exists=f[cat].findIndex(function(x){return (x.t||x.n||'')===key})>-1;
+  if(exists){f[cat]=f[cat].filter(function(x){return (x.t||x.n||'')!==key})}
+  else{f[cat].push(item)}
+  S.universal.favorites=f;
+  $uS();return!exists;
+ },
+ isFavorite:function(cat,item){
+  var f=$u('favorites',{});
+  if(!f[cat])return false;
+  var key=item.t||item.n||'';
+  return f[cat].findIndex(function(x){return (x.t||x.n||'')===key})>-1;
+ },
+ addHistory:function(item,tp){
+  var h=$u('history',[]);
+  var key=(item.t||item.n||'').toLowerCase().replace(/[^a-z0-9]/g,'');
+  h=h.filter(function(x){return((x.t||x.n||'').toLowerCase().replace(/[^a-z0-9]/g,''))!==key});
+  h.unshift({t:item.t||item.n||'',u:item.u||item.url||'',tp:tp||'unknown',ts:Date.now()});
+  h=h.slice(0,200);
+  S.universal.history=h;
+  $uS();
+ },
+ getHistory:function(){return $u('history',[]);},
+ saveContinue:function(item,tp,pos){
+  var c=$u('continueItems',[]);
+  var key=(item.t||item.n||'').toLowerCase().replace(/[^a-z0-9]/g,'');
+  c=c.filter(function(x){return((x.t||x.n||'').toLowerCase().replace(/[^a-z0-9]/g,''))!==key});
+  c.push({t:item.t||item.n||'',u:item.u||item.url||'',tp:tp||'unknown',pos:pos||0,ts:Date.now()});
+  if(c.length>100)c=c.slice(0,100);
+  S.universal.continueItems=c;
+  $uS();
+ },
+ getContinue:function(tp){
+  var c=$u('continueItems',[]);
+  if(tp)return c.filter(function(x){return x.tp===tp});
+  return c;
+ },
+ addQuickAction:function(a){
+  var q=$u('quickActions',[]);
+  var key=(a.t||a.label||'').toLowerCase().replace(/[^a-z0-9]/g,'');
+  q=q.filter(function(x){return((x.t||x.label||'').toLowerCase().replace(/[^a-z0-9]/g,''))!==key});
+  q.unshift({t:a.t||a.label||'',u:a.u||a.url||'',icon:a.icon||'📌',tp:a.tp||'action'});
+  q=q.slice(0,30);
+  S.universal.quickActions=q;
+  $uS();
+ },
+ getQuickActions:function(){return $u('quickActions',[]);},
+ clearAll:function(){
+  S.universal={favorites:{},history:[],continueItems:[],preferences:{},quickActions:[]};
+  $uS();
+ }
+};
+window.PS=PS;
+
+// ============================================================
+// GLOBAL MEDIA PLAYER + QUEUE SERVICE
+// ============================================================
+var GM={
+ player:AU,
+ queue:[],
+ playing:false,
+ current:null,
+ volume:parseFloat(localStorage.getItem('iptv-vol')||'0.85'),
+ mute:false,
+ init:function(){
+  this.volume=this.volume||parseFloat(localStorage.getItem('iptv-vol')||'0.85');
+  AU.volume=this.volume;
+  this.radioTimer=null;
+ },
+ play:function(item){
+  if(this.current&&this.current===item&&!AU.paused){this.pause();return}
+  this.current=item;
+  if(/\\.m3u8/i.test(item.u)){
+   this._playHLS(item);return}
+  AU.src=item.u;
+  AU.play().catch(function(){toast('Tap PLAY to start',false)});
+  this.playing=true;
+  this._trackRadio();
+ },
+ _playHLS:function(item){
+  toast('HLS station - opening in VLC', 'bad');
+  fetch('/play?url='+encodeURIComponent(item.u)).then(function(r){return r.json()})
+   .then(function(j){toast(j.msg,j.ok?'ok':'bad')});
+ },
+ pause:function(){
+  AU.pause();
+  this.playing=false;
+  this._untrackRadio();
+ },
+ toggle:function(){
+  if(AU.paused){this.play(this.current)}
+  else{this.pause()}
+ },
+ next:function(){
+  if(this.queue.length>0){
+   var next=this.queue.shift();
+   this.play(next);
+   this._saveQueue();
+  }else{toast('No more in queue', 'bad')}
+ },
+ prev:function(){
+  toast('No previous', 'bad')
+ },
+ setVolume:function(v){
+  this.volume=v;
+  AU.volume=v;
+  localStorage.setItem('iptv-vol',v);
+  this.volume=v;
+ },
+ toggleMute:function(){
+  this.mute=!this.mute;
+  AU.muted=this.mute;
+  localStorage.setItem('iptv-mute',this.mute);
+  this.mute=!this.mute;
+ },
+ _trackRadio:function(){
+  // Keep radio playing while navigating - only stop when user pauses or changes mode explicitly
+  if(!this.radioTimer){
+   this.radioTimer=setInterval(function(){
+    if(AU.paused||!GM.playing)return;
+    // Check if current station is still playing
+    if(AU.readyState>=2){
+     // Keep alive
+    }
+   },10000)
+  }
+ },
+ _untrackRadio:function(){
+  if(this.radioTimer){clearInterval(this.radioTimer);this.radioTimer=null}
+ },
+ _saveQueue:function(){
+  try{localStorage.setItem('gm-queue',JSON.stringify(this.queue))}catch(e){}
+ }
+};
+GM.init();
+window.GM=GM;
+
+// Queue UI buttons
+$('pbfav').onclick=function(){
+ if(GM.current){PS.addQuickAction({t:GM.current.n||GM.current.t||'stream',u:GM.current.u,icon:'★',tp:GM.cur?GM.cur.t:'radio'})}
+ toastr('Added to favorites','ok')
+};
+$('pbnext').onclick=function(){
+ GM.next();
+};
+$('pbqueue').onclick=function(){
+ // Show queue modal - display current queue from localStorage
+ var q=JSON.parse(localStorage.getItem('gm-queue')||'[]');
+ var h='<div style="max-height:400px;overflow:auto"><div class="spa-cards">';
+ if(!q.length){h+='<div class="pempty">Queue is empty</div>'}
+ else{q.slice(0,20).forEach(function(a,i){h+='<div class="spa-card"><div class="spa-icon">'+(i+1)+'.</div><div class="spa-title">'+(a.t||'')+'</div><div class="spa-sub">'+(a.u?.substring(0,30)||'')+'</div><button class="small" onclick="GM.queue=a;GM.play(a)">Play</button></div>'})}
+ h+='</div></div>';
+ toast(h,'ok')
+};
 function hhmm(ep){if(!ep)return'';
  return new Date(ep*1000).toLocaleTimeString([],
  {hour:'2-digit',minute:'2-digit'})}
@@ -1449,8 +1677,11 @@ var MODE='tv';
 function setMode(m){
  MODE=m;document.body.setAttribute('data-mode',m);
  var nb=document.querySelectorAll('#mainnav button');
- for(var i=0;i<nb.length;i++)
-  nb[i].className=(nb[i].dataset.mode===m)?'on':'';
+ for(var i=0;i<nb.length;i++){
+  var btn=nb[i];
+  btn.className=(btn.dataset.mode===m)?'on':'';
+  btn.onclick=function(){navigateTo(this.dataset.mode)};
+ }
  var med=(m==='media'||m==='tv'||m==='radio');
  $('chips').style.display=med?'flex':'none';
  document.querySelector('.legend').style.display=med?'block':'none';
@@ -1467,6 +1698,144 @@ function setMode(m){
  if(m==='radio'&&S.pl!=='rin')load('rin');
 }
 window.setMode=setMode;
+
+// ===== SPA ROUTING SYSTEM (hash-based navigation) =====
+var ROUTES={
+ 'home':function(){showHomeDashboard()},
+ 'favorites':function(){showFavoritesPage()},
+ 'history':function(){showHistoryPage()},
+ 'continue':function(){showContinuePage()},
+ 'search':function(){showGlobalSearch()},
+ 'tv':function(){setMode('tv');load('in')},
+ 'radio':function(){setMode('radio');load('rin')},
+ 'news':function(){setMode('news')},
+ 'podcasts':function(){setMode('podcasts')},
+ 'markets':function(){setMode('markets')},
+ 'books':function(){setMode('books')}
+};
+function routeChange(hash){
+ var route=(hash||window.location.hash.slice(1)||'home').toLowerCase();
+ // Close modals
+ document.querySelectorAll('.modal.open').forEach(function(m){m.className='modal'});
+ // Clear active nav
+ var cur=$('mainnav').querySelector('button.on');
+ if(cur)cur.className='';
+ // Route
+ if(ROUTES[route])ROUTES[route]();
+ else{setMode('tv');load('in')}
+}
+window.addEventListener('hashchange',function(){routeChange(window.location.hash.slice(1))});
+// Init: if no hash, default to home
+if(!window.location.hash){window.location.hash='#home'}else{routeChange(window.location.hash.slice(1))};
+window.navigateTo=function(path){window.location.hash='#'+path}
+
+// ===== SPA PAGES =====
+function showHomeDashboard(){
+ var h='';
+ h+='<div class="spa-home"><div class="spa-hero"><div><h2>What can I watch, listen to or read right now?</h2><p>Continue where you left off, discover what\'s live, and jump back into favorites.</p></div></div>';
+ // Quick actions
+ var qa=$u('quickActions',[]);
+ h+='<section class="spa-section"><h3>Quick Actions</h3><div class="spa-cards">';
+ if(!qa.length){h+='<div class="pempty">No quick actions yet - tap a channel or station to pin it.</div>'}
+ else{qa.forEach(function(a){h+='<div class="spa-card" onclick="navigateTo(\''+(a.tp||'tv')+'\')"><div class="spa-icon">'+(a.icon||'📌')+'</div><div class="spa-title">'+esc(a.t)+'</div></div>'})}
+ h+='</div></section>';
+ // Continue watching
+ var c=$u('continueItems',[]);
+ h+='<section class="spa-section"><h3>Continue Watching / Listening / Reading</h3><div class="spa-cards">';
+ if(!c.length){h+='<div class="pempty">Nothing to continue yet - start something and it will appear here.</div>'}
+ else{c.slice(0,6).forEach(function(a){h+='<div class="spa-card" onclick="navigateTo(\''+(a.tp||'tv')+'\')"><div class="spa-icon">'+(a.tp==='radio'?'🎧':a.tp==='books'?'📖':'📺')+'</div><div class="spa-title">'+esc(a.t)+'</div><div class="spa-sub">'+esc(a.tp||'media')+'</div></div>'})}
+ h+='</div></section>';
+ // Live now
+ h+='<section class="spa-section"><h3>Live Now</h3><div class="spa-cards"><div class="spa-card live"><div class="spa-icon">🔴</div><div class="spa-title">Watch live TV</div><div class="spa-sub">Browse what\'s on now</div></div><div class="spa-card live"><div class="spa-icon">🎧</div><div class="spa-title">Listen to live radio</div><div class="spa-sub">500+ stations worldwide</div></div></div></section>';
+ // Favorites
+ var f=$u('favorites',{});
+ var favCount=0;for(var cat in f)favCount+=f[cat].length;
+ h+='<section class="spa-section"><h3>Favorites ('+favCount+')</h3><div class="spa-cards">';
+ if(!favCount){h+='<div class="pempty">Star your favorite TV, radio, podcasts, books and markets to see them here.</div>'}
+ else{var shown=0;for(var cat in f){f[cat].slice(0,3).forEach(function(a){if(shown>=6)return;h+='<div class="spa-card" onclick="navigateTo(\''+(cat||'tv')+'\')"><div class="spa-icon">⭐</div><div class="spa-title">'+esc(a.t||a.n||'')+'</div><div class="spa-sub">'+esc(cat)+'</div></div>';shown++})}}
+ h+='</div></section>';
+ // Today's useful content
+ h+='<section class="spa-section"><h3>Today\'s Useful Content</h3><div class="spa-cards"><div class="spa-card" onclick="navigateTo(\'news\')"><div class="spa-icon">📰</div><div class="spa-title">Latest news headlines</div><div class="spa-sub">60+ stories from top sources</div></div><div class="spa-card" onclick="navigateTo(\'markets\')"><div class="spa-icon">📈</div><div class="spa-title">Market snapshot</div><div class="spa-sub">NIFTY • SENSEX • US markets</div></div><div class="spa-card" onclick="navigateTo(\'books\')"><div class="spa-icon">📚</div><div class="spa-title">Free books</div><div class="spa-sub">70,000+ public domain titles</div></div></div></section>';
+ $('grid').innerHTML=h;
+ $('grid').style.display='grid';
+ document.querySelector('.row2').style.display='none';
+ document.querySelector('.legend').style.display='none';
+ document.querySelector('.note').style.display='none';
+}
+function showFavoritesPage(){
+ var f=$u('favorites',{});
+ var h='<div class="spa-home"><h2>⭐ Favorites</h2><div class="spa-sections">';
+ var cats=['tv','radio','news','podcasts','books','markets'];
+ cats.forEach(function(cat){
+  var items=f[cat]||[];
+  if(!items.length)return;
+  h+='<section class="spa-section"><h3>'+esc(cat.charAt(0).toUpperCase()+cat.slice(1))+'</h3><div class="spa-cards">';
+  items.forEach(function(a){h+='<div class="spa-card"><div class="spa-icon">⭐</div><div class="spa-title">'+esc(a.t||a.n||'')+'</div><div class="spa-sub">'+esc(a.u||a.url||'')+'</div></div>'});
+  h+='</div></section>';
+ });
+ h+='</div></div>';
+ $('grid').innerHTML=h;
+ $('grid').style.display='grid';
+ document.querySelector('.row2').style.display='none';
+ document.querySelector('.legend').style.display='none';
+ document.querySelector('.note').style.display='none';
+}
+function showHistoryPage(){
+ var h=$u('history',[]);
+ var out='<div class="spa-home"><h2>🕘 Recently Used</h2><div class="spa-sections">';
+ if(!h.length){out+='<div class="pempty">Your recent activity will appear here.</div>'}
+ else{out+='<div class="spa-cards">';h.slice(0,20).forEach(function(a){out+='<div class="spa-card" onclick="navigateTo(\''+(a.tp||'tv')+'\')"><div class="spa-icon">🕘</div><div class="spa-title">'+esc(a.t)+'</div><div class="spa-sub">'+esc(a.tp||'media')+'</div></div>'});out+='</div>'}
+ out+='</div></div>';
+ $('grid').innerHTML=out;
+ $('grid').style.display='grid';
+ document.querySelector('.row2').style.display='none';
+ document.querySelector('.legend').style.display='none';
+ document.querySelector('.note').style.display='none';
+}
+function showContinuePage(){
+ var c=$u('continueItems',[]);
+ var out='<div class="spa-home"><h2>▶ Continue Watching / Listening / Reading</h2><div class="spa-sections">';
+ if(!c.length){out+='<div class="pempty">Nothing to continue yet.</div>'}
+ else{out+='<div class="spa-cards">';c.slice(0,20).forEach(function(a){out+='<div class="spa-card" onclick="navigateTo(\''+(a.tp||'tv')+'\')"><div class="spa-icon">▶</div><div class="spa-title">'+esc(a.t)+'</div><div class="spa-sub">'+esc(a.tp||'media')+'</div></div>'});out+='</div>'}
+ out+='</div></div>';
+ $('grid').innerHTML=out;
+ $('grid').style.display='grid';
+ document.querySelector('.row2').style.display='none';
+ document.querySelector('.legend').style.display='none';
+ document.querySelector('.note').style.display='none';
+}
+function showGlobalSearch(){
+ var q=($('q').value||'').toLowerCase();
+ var out='<div class="spa-home"><h2>🔍 Search Everything</h2><div class="spa-sections">';
+ if(!q){out+='<div class="pempty">Type in the search bar above to search TV, Radio, News, Podcasts, Books and Markets.</div>'}
+ else{
+  var cats=['tv','radio','news','podcasts','books','markets'];
+  var found=0;
+  cats.forEach(function(cat){
+   var items=[];
+   if(cat==='tv')items=S.chans;
+   else if(cat==='radio')items=S.chans;
+   else if(cat==='news')items=(NEWS.items||[]);
+   else if(cat==='podcasts')items=(POD.items||[]);
+   else if(cat==='books')items=(BK.items||[]);
+   else if(cat==='markets')items=(MKT.rows||[]);
+   var matches=items.filter(function(x){return((x.t||x.n||x.s||x.sym||'').toLowerCase().indexOf(q)>-1)}).slice(0,10);
+   if(matches.length){
+    found++;
+    out+='<section class="spa-section"><h3>'+esc(cat.charAt(0).toUpperCase()+cat.slice(1))+'</h3><div class="spa-cards">';
+    matches.forEach(function(a){out+='<div class="spa-card"><div class="spa-icon">🔍</div><div class="spa-title">'+esc(a.t||a.n||a.s||a.sym||'')+'</div></div>'});
+    out+='</div></section>';
+   }
+  });
+  if(!found)out+='<div class="pempty">No results found. Try a different search term.</div>';
+ }
+ out+='</div></div>';
+ $('grid').innerHTML=out;
+ $('grid').style.display='grid';
+ document.querySelector('.row2').style.display='flex';
+ document.querySelector('.legend').style.display='none';
+ document.querySelector('.note').style.display='none';
+}
 
 /* ===== THEME ===== */
 (function(){var t=localStorage.getItem('iptv-theme');
@@ -1566,10 +1935,17 @@ function radioPlay(it){
   toast('HLS station - opening in VLC','bad');
   fetch('/play?url='+encodeURIComponent(it.u)).then(function(r){return r.json()})
   .then(function(j){toast(j.msg,j.ok?'ok':'bad')});
+  PS.addHistory(it,'radio');
+  PS.saveContinue(it,'radio',0);
   pushHist(it,'radio');return}
  PB.vlcTried=false;$('pbplay').innerHTML='\\u23F8';
  toast('\\u266B '+plain(esc(it.n)).slice(0,36));
- radioConnect(it);pushHist(it,'radio')}
+ radioConnect(it);
+ // Track with universal personalization
+ PS.addHistory(it,'radio');
+ PS.saveContinue(it,'radio',0);
+ PS.addQuickAction({t:it.n||'stream',u:it.u,icon:'🎧',tp:'radio'});
+ pushHist(it,'radio')}
 $('pbplay').onclick=function(){
  if(!PB.cur)return;
  if(AU.paused){var pr=AU.play();if(pr&&pr.catch)pr.catch(function(){});
@@ -1667,13 +2043,17 @@ function render(reset){
   var dtxt=dcls==='online'?'\\u2713':(dcls==='dead'?'\\u2715':
    (dcls==='unknown'?'~':(!isHttp?'?':'\\u00B7')));
   var isFav=S.favs.some(function(f){return f.u===it.u});
+  // Universal favorites check
+  var uFav=PS.isFavorite(rad?'radio':'tv',it);
+  var cont=PS.getContinue(rad?'radio':'tv').find(function(c){return c.u===it.u});
+  var contMark=cont?'<span class="conti" title="Continue watching">▶</span>':'';
   h+='<div class="card" data-u="'+esc(it.u)+'">'+
    '<div class="top"><button class="dot '+dcls+'" data-u="'+esc(it.u)+
     '" title="stream check">'+dtxt+'</button>'+
-   '<button class="fav'+(isFav?' on':'')+'" data-u="'+esc(it.u)+
+   '<button class="fav'+(isFav||uFav?' on':'')+'" data-u="'+esc(it.u)+
     '" title="Favorite">\\u2605</button></div>'+
    (it.l?'<img src="'+esc(it.l)+'" loading="lazy" onerror="this.remove()">':'')+
-   '<div class="cname">'+esc(it.n)+'</div>'+
+   '<div class="cname">'+esc(it.n)+contMark+'</div>'+
    '<div class="now"></div>'+badges(it)+
    '<div class="grp">'+esc(it.g)+'</div>'+
    '<button class="watch" data-u="'+esc(it.u)+'">'+
@@ -1726,6 +2106,10 @@ function test(u,manual){
 
 /* ===== ACTIONS ===== */
 function pushHist(it,tp){if(!it||!it.u)return;
+ // Universal personalization tracking
+ var cat = (S.pl==='favs'||S.pl==='recent')?tp:(plTypeOf(S.pl)==='radio'?'radio':'tv');
+ PS.addHistory(it,cat);
+ PS.saveContinue(it,cat,0);
  S.hist=S.hist.filter(function(x){return x.u!==it.u});
  S.hist.unshift({n:it.n,u:it.u,l:it.l,g:it.g,tp:tp||it.tp||'tv'});
  S.hist=S.hist.slice(0,60);lsSet('iptv-hist',S.hist);buildTabs();
@@ -1926,11 +2310,18 @@ function nPaint(){
  for(var k=0;k<idxs.length;k++){var i2=idxs[k],a=NEWS.items[i2];
   var thumb=a.d?'<img src="'+esc(a.d)+'" loading="lazy" '+
    'onerror="this.remove()">':'';
+  // Add favorite icon
+  var favIcon=PS.isFavorite('news',a)?'⭐':'☆';
+  // Add continue indicator
+  var contIcon='';
+  var cont=PS.getContinue('news').find(function(c){return c.t===a.t});
+  if(cont)contIcon='<span class="conti" title="Continue reading">▶</span>';
   h+='<article class="ni'+(k===0&&!q?' hero':'')+'" data-i="'+i2+'">'+
+   '<div class="nifav" onclick="PS.toggleFavorite(\'news\',a);nPaint();event.stopPropagation()">'+favIcon+'</div>'+
    thumb+'<div class="nitxt"><h3>'+esc(a.t)+'</h3>'+
    (k===0&&!q&&a.b?'<p>'+esc(a.b)+'</p>':'')+
    '<span class="nimeta">'+esc(a.s)+(a.pub?' &middot; '+agoT(a.pub):'')+
-   '</span></div></article>'}
+   ' '+contIcon+'</span></div></article>'}
  $('nlist').innerHTML=h}
 $('nchips').onclick=function(e){var b=e.target.closest('button');
  if(b)nShow(b.dataset.c)};
@@ -1939,6 +2330,9 @@ $('nq').addEventListener('input',function(){clearTimeout(window._nqt);
 $('nlist').onclick=function(e){var a=e.target.closest('.ni');if(!a)return;
  nOpen(parseInt(a.dataset.i,10))};
 function nOpen(i){var a=NEWS.items[i];if(!a)return;
+ // Track with universal personalization
+ PS.addHistory(a,'news');
+ PS.saveContinue(a,'news',0);
  $('rvtitle').textContent=a.t;
  $('rvmeta').textContent=a.s+(a.pub?(' - '+new Date(a.pub*1000)
   .toLocaleString()):'');
@@ -2033,10 +2427,16 @@ function podShow(){
      h+='<div class="podsource"><h4>'+esc(source)+'</h4>';
      for(var j=0;j<grouped[source].length;j++){
        var a=grouped[source][j];
+       var fav=PS.isFavorite('podcasts',a)?'⭐':'☆';
+       var cont='';
+       var cItems=PS.getContinue('podcasts');
+       if(cItems.find(function(c){return c.t===a.t}))cont=' <span class="conti">▶</span>';
        h+='<article class="podcard">'+(a.d?'<img src="'+esc(a.d)+
           '" loading="lazy" onerror="this.remove()">':'')+
           '<div class="podtext"><b>'+esc(a.t)+'</b><div class="nimeta">'+
-          esc(a.s)+(a.pub?' &middot; '+agoT(a.pub):'')+'</div>'+
+          esc(a.s)+(a.pub?' &middot; '+agoT(a.pub):'')+
+          ' <span class="podfav" onclick="PS.toggleFavorite(\'podcasts\',a);podPaint();event.stopPropagation()">'+fav+'</span>'+
+          cont+'</div>'+
           (a.b?'<p>'+esc(a.b)+'</p>':'')+'</div>'+
           (a.audio?'<audio controls preload="none" src="'+esc(a.audio)+'"></audio>':'')+
           (a.l?'<a class="big blue" target="_blank" rel="noopener" href="'+
@@ -2103,10 +2503,11 @@ function barV(vals,w,h){
  return'<svg width="'+w+'" height="'+h+'">'+b+'</svg>'}
 function mkRow(q,label,canRm){
  var live=q.state==='REGULAR'||q.state==='OPEN';
- return'<div class="mkrow" data-sym="'+esc(q.sym)+'">'+
+ var fav=PS.isFavorite('markets',q)?'⭐':'☆';
+ return'<div class="mkrow" data-sym="'+esc(q.sym)+'" onclick="PS.addHistory({t:\''+(label||q.name||q.sym)+'\',u:\'/api/quote?sym='+esc(q.sym)+'\',tp:\'markets\'},\'markets\');PS.saveContinue({t:\''+(label||q.name||q.sym)+'\',u:\'/api/quote?sym='+esc(q.sym)+'\',tp:\'markets\'},\'markets\',0)">'+
   '<div class="mkid"><b>'+esc(label||q.name||q.sym)+'</b>'+
   '<span class="mkst '+(live?'live':'off')+'">'+(live?'LIVE':'CLOSED')+
-  '</span>'+(canRm?'<button class="rm" data-sym="'+esc(q.sym)+
+  '</span>'+fav+(canRm?'<button class="rm" data-sym="'+esc(q.sym)+
   '" title="Remove">\\u2715</button>':'')+'</div>'+
   '<div class="mknum"><span class="mkp">'+money(q.price,q.cur)+'</span>'+
   chgHtml(q.price,q.prev)+'<small>O '+money(q.open,q.cur)+
@@ -2272,6 +2673,7 @@ function bPaint(){
   var pos=null;
   try{pos=JSON.parse(localStorage.getItem('srt-book-'+b.id)||'null')}
   catch(e){}
+  var fav=PS.isFavorite('books',b)?'⭐':'☆';
   h+='<div class="card book" data-id="'+b.id+'">'+
    (b.cov?'<img src="'+esc(b.cov)+'" loading="lazy" '+
     'onerror="this.replaceWith(document.createElement(\\'div\\'))">':
@@ -2280,12 +2682,18 @@ function bPaint(){
    '<div class="grp">'+esc(b.a)+'</div>'+
    '<div class="grp">&#11015; '+(b.d||0).toLocaleString()+
    (pos&&pos.pc?' &middot; '+pos.pc+'%':'')+'</div>'+
-   '<button class="watch" data-id="'+b.id+'">&#128214; '+
+   '<button class="watch" data-id="'+b.id+'">'+fav+' &#128214; '+
    (pos?'Continue':'Read')+'</button></div>'}
  $('bkgrid').innerHTML=h}
 $('bkgrid').onclick=function(e){
  var c=e.target.closest('.book');if(!c)return;
+ if(e.target.closest('.watch')){
+  var b=BK.items.find(function(x){return x.id===parseInt(c.dataset.id,10)});
+  if(b)PS.toggleFavorite('books',b);
+  bPaint();return}
  var t=c.querySelector('.cname');
+ var b=BK.items.find(function(x){return x.id===parseInt(c.dataset.id,10)});
+ if(b){PS.addHistory(b,'books');PS.saveContinue(b,'books',0)}
  openBook(parseInt(c.dataset.id,10),t?t.textContent:'Book')};
 $('bklang').onclick=function(e){var b=e.target.closest('button');if(!b)return;
  BK.lang=b.dataset.l;localStorage.setItem('srt-blang',BK.lang);
@@ -2436,8 +2844,14 @@ $('grid').onclick=function(e){
 $('q').addEventListener('input',function(){clearTimeout(window._qt);
  window._qt=setTimeout(function(){
   S.q=$('q').value.trim();
-  if(!S.q)S.cat='all';
-  buildChips();render(true)},200)});
+  if(window.location.hash==='#home'){
+   if(S.q.length>2){showGlobalSearch();}
+   else{showHomeDashboard();}
+  }else{
+   if(!S.q)S.cat='all';
+   buildChips();render(true);
+  }
+ },200)});
 document.addEventListener('keydown',function(e){
  if($('bookview').style.display==='flex'){
   if(e.key==='ArrowRight'&&BK.pg<BK.pages-1)loadPage(BK.pg+1);
