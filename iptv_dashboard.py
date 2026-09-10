@@ -2351,7 +2351,7 @@ var POD={loaded:false};
 var POD_SRC = '';
 function podPopulateSrc(){var h='<option value=\"\">All</option>';PODCAST_FEEDS.forEach(function(a){var sel=(a[0]===POD_SRC)?' selected=\"selected\"':'';h+='<option value=\"'+a[0]+'\"'+sel+'>'+esc(a[0])+'</option>'});
  // Add directory categories as filter options
- for(var cat in PODCAST_DIRECTORY_FEEDS){var name=cat.replace(/_/g,' ').replace(/\b\w/g,function(l){return l.toUpperCase()});
+ for(var cat in PODCAST_DIRECTORY_FEEDS){var name=cat.replace(/_/g,' ').replace(/\\b\\w/g,function(l){return l.toUpperCase()});
   h+='<option value=\"dir:'+cat+'\"'+((POD_SRC==='dir:'+cat)?' selected=\"selected\"':'')+'>'+esc(name)+' feeds</option>';}
  $('podsrc').innerHTML=h;}
 $('podsrc').onchange=function(){POD_SRC=this.value;podPaint();};
