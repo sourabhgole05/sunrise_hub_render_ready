@@ -1649,7 +1649,7 @@ window.GM=GM;
 // Queue UI buttons
 $('pbfav').onclick=function(){
  if(GM.current){PS.addQuickAction({t:GM.current.n||GM.current.t||'stream',u:GM.current.u,icon:'★',tp:GM.cur?GM.cur.t:'radio'})}
- toastr('Added to favorites','ok')
+ toast('Added to favorites','ok')
 };
 $('pbnext').onclick=function(){
  GM.next();
