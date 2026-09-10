@@ -1474,7 +1474,7 @@ S.universal=(function(){
  }catch(e){ return {favorites:{},history:[],continueItems:[],preferences:{},quickActions:[]}};
 })();
 function $u(k,def){return S.universal[k]!==undefined?S.universal[k]:def;}
-function $uS(k,v){try{localStorage.setItem('iptv-universal',JSON.stringify(S.universal));}catch(e){}}
+function $uS(k,v){try{S.universal[k]=v;localStorage.setItem('iptv-universal',JSON.stringify(S.universal));}catch(e){}}
 // Persist changes to localStorage immediately
 (function(){
  var u=S.universal; if(u.changed){$uS(); u.changed=false;}
@@ -1648,7 +1648,7 @@ window.GM=GM;
 
 // Queue UI buttons
 $('pbfav').onclick=function(){
- if(GM.current){PS.addQuickAction({t:GM.current.n||GM.current.t||'stream',u:GM.current.u,icon:'★',tp:GM.cur?GM.cur.t:'radio'})}
+ if(GM.current){PS.addQuickAction({t:GM.current.n||GM.current.t||'stream',u:GM.current.u,icon:'★',tp:GM.current?GM.current.t:'radio'})}
  toast('Added to favorites','ok')
 };
 $('pbnext').onclick=function(){
@@ -1732,7 +1732,7 @@ window.navigateTo=function(path){window.location.hash='#'+path}
 // ===== SPA PAGES =====
 function showHomeDashboard(){
  var h='';
- h+='<div class="spa-home"><div class="spa-hero"><div><h2>What can I watch, listen to or read right now?</h2><p>Continue where you left off, discover what\'s live, and jump back into favorites.</p></div></div>';
+ h+='<div class="spa-home"><div class="spa-hero"><div><h2>What can I watch, listen to or read right now?</h2><p>Continue where you left off, discover what\\'s live, and jump back into favorites.</p></div></div>';
  // Quick actions
  var qa=$u('quickActions',[]);
  h+='<section class="spa-section"><h3>Quick Actions</h3><div class="spa-cards">';
@@ -2351,7 +2351,7 @@ var POD={loaded:false};
 var POD_SRC = '';
 function podPopulateSrc(){var h='<option value=\"\">All</option>';PODCAST_FEEDS.forEach(function(a){var sel=(a[0]===POD_SRC)?' selected=\"selected\"':'';h+='<option value=\"'+a[0]+'\"'+sel+'>'+esc(a[0])+'</option>'});
  // Add directory categories as filter options
- for(var cat in PODCAST_DIRECTORY_FEEDS){var name=cat.replace(/_/g,' ').replace(/\\b\\w/g,function(l){return l.toUpperCase()});
+ for(var cat in PODCAST_DIRECTORY_FEEDS){var name=cat.replace(/_/g,' ');name=name.charAt(0).toUpperCase()+name.slice(1);
   h+='<option value=\"dir:'+cat+'\"'+((POD_SRC==='dir:'+cat)?' selected=\"selected\"':'')+'>'+esc(name)+' feeds</option>';}
  $('podsrc').innerHTML=h;}
 $('podsrc').onchange=function(){POD_SRC=this.value;podPaint();};
