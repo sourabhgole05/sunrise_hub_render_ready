@@ -1726,7 +1726,11 @@ function routeChange(hash){
 }
 window.addEventListener('hashchange',function(){routeChange(window.location.hash.slice(1))});
 // Init: if no hash, default to home
-if(!window.location.hash){window.location.hash='#home'}else{routeChange(window.location.hash.slice(1))};
+if(!window.location.hash){window.location.hash='#home';routeChange('home')}
+else{routeChange(window.location.hash.slice(1))}
+// Auto-load TV/Radio cards when navigated directly
+(function(){var h=window.location.hash.slice(1).toLowerCase();
+ if(h==='tv'||h==='radio')setTimeout(function(){load(h==='tv'?'in':'rin')},800)});
 window.navigateTo=function(path){window.location.hash='#'+path}
 
 // ===== SPA PAGES =====
