@@ -1,6 +1,6 @@
 
 var PL=__PL__;
-var T_FAV='\\u2605 Favorites',T_REC='\\u23F0 Recent';
+var T_FAV='\u2605 Favorites',T_REC='\u23F0 Recent';
 var ISMOBILE=/Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
 var IS_CLOUD=__CLOUD__;
 var CHUNK=ISMOBILE?60:120,CONC=ISMOBILE?3:4,MAXAUTO=ISMOBILE?80:240,
@@ -392,13 +392,13 @@ function showGlobalSearch(){
 /* ===== THEME ===== */
 (function(){var t=localStorage.getItem('iptv-theme');
  if(t==='dark'){document.documentElement.setAttribute('data-theme','dark');
-  $('themebtn').innerHTML='\\u263D'}
+  $('themebtn').innerHTML='\u263D'}
  $('themebtn').onclick=function(){
   var d=document.documentElement.getAttribute('data-theme')==='dark';
   if(d){document.documentElement.removeAttribute('data-theme');
-   this.innerHTML='\\u263C';localStorage.setItem('iptv-theme','light')}
+   this.innerHTML='\u263C';localStorage.setItem('iptv-theme','light')}
   else{document.documentElement.setAttribute('data-theme','dark');
-   this.innerHTML='\\u263D';localStorage.setItem('iptv-theme','dark')}}})();
+   this.innerHTML='\u263D';localStorage.setItem('iptv-theme','dark')}}})();
 
 /* ===== RADIO ENGINE v3 ===== */
 var PB={on:false,cur:null,tries:0,timer:null,wd:null,bt:null,
@@ -418,7 +418,7 @@ function radioStop(msg){
  AU.onplaying=AU.onpause=AU.onended=AU.onerror=null;
  clearInterval(PB.wd);clearTimeout(PB.timer);clearInterval(PB.bt);
  document.body.classList.remove('playing');PB.on=false;PB.cur=null;PB.tries=0;
- $('pbplay').innerHTML='\\u25B6';$('pbstate').textContent='Stopped';
+ $('pbplay').innerHTML='\u25B6';$('pbstate').textContent='Stopped';
  $('pbslp').value='0';
  if(msg)toast(msg,'bad')}
 function radioConnect(it){
@@ -444,8 +444,8 @@ function radioConnect(it){
   var pr=AU.play();
   if(pr&&pr.catch)pr.catch(function(){pbSet('Tap PLAY to start',false)})};
  clearTimeout(PB.timer);PB.timer=setTimeout(go,7200);
- AU.onplaying=function(){PB.tries=0;PB.lastT=-1;PB.stall=0;pbSet('\\u266A LIVE - on air',true)};
- AU.onpause=function(){$('pbplay').innerHTML='\\u25B6'};
+ AU.onplaying=function(){PB.tries=0;PB.lastT=-1;PB.stall=0;pbSet('\u266A LIVE - on air',true)};
+ AU.onpause=function(){$('pbplay').innerHTML='\u25B6'};
  // Live streams often fire a synthetic 'ended' event in browsers; ignore it
  // unless the user actually paused us. Only react to real errors.
  AU.onended=function(){if(!PB.on||AU.paused||!PB.cur)return;};
@@ -488,8 +488,8 @@ function radioPlay(it){
   PS.addHistory(it,'radio');
   PS.saveContinue(it,'radio',0);
   pushHist(it,'radio');return}
- PB.vlcTried=false;$('pbplay').innerHTML='\\u23F8';
- toast('\\u266B '+plain(esc(it.n)).slice(0,36));
+ PB.vlcTried=false;$('pbplay').innerHTML='\u23F8';
+ toast('\u266B '+plain(esc(it.n)).slice(0,36));
  radioConnect(it);
  // Track with universal personalization
  PS.addHistory(it,'radio');
@@ -499,9 +499,9 @@ function radioPlay(it){
 $('pbplay').onclick=function(){
  if(!PB.cur)return;
  if(AU.paused){var pr=AU.play();if(pr&&pr.catch)pr.catch(function(){});
-  this.innerHTML='\\u23F8'}
- else{AU.pause();this.innerHTML='\\u25B6'}};
-AU.onplay=function(){$('pbplay').innerHTML='\\u23F8'};
+  this.innerHTML='\u23F8'}
+ else{AU.pause();this.innerHTML='\u25B6'}};
+AU.onplay=function(){$('pbplay').innerHTML='\u23F8'};
 $('pbvol').value=Math.round(AU.volume*100);
 $('pbvol').oninput=function(){AU.volume=this.value/100;
  localStorage.setItem('iptv-vol',this.value/100)};
@@ -593,8 +593,8 @@ function render(reset){
   var isHttp=/^https?:/i.test(it.u);
   var dcls=cached?(cached.ok===true?'online':
    (cached.ok===false?'dead':(isHttp?'unknown':'nonhttp'))):'';
-  var dtxt=dcls==='online'?'\\u2713':(dcls==='dead'?'\\u2715':
-   (dcls==='unknown'?'~':(!isHttp?'?':'\\u00B7')));
+  var dtxt=dcls==='online'?'\u2713':(dcls==='dead'?'\u2715':
+   (dcls==='unknown'?'~':(!isHttp?'?':'\u00B7')));
   var isFav=S.favs.some(function(f){return f.u===it.u});
   // Universal favorites check
   var uFav=PS.isFavorite(rad?'radio':'tv',it);
@@ -604,13 +604,13 @@ function render(reset){
    '<div class="top"><button class="dot '+dcls+'" data-u="'+esc(it.u)+
     '" title="stream check">'+dtxt+'</button>'+
    '<button class="fav'+(isFav||uFav?' on':'')+'" data-u="'+esc(it.u)+
-    '" title="Favorite">\\u2605</button></div>'+
+    '" title="Favorite">\u2605</button></div>'+
    (it.l?'<img src="'+esc(it.l)+'" loading="lazy" onerror="this.remove()">':'')+
    '<div class="cname">'+esc(it.n)+contMark+'</div>'+
    '<div class="now"></div>'+badges(it)+
    '<div class="grp">'+esc(it.g)+'</div>'+
    '<button class="watch" data-u="'+esc(it.u)+'">'+
-   (rad?'\\u266A Listen':'\\u25B6 Watch')+'</button>'+
+   (rad?'\u266A Listen':'\u25B6 Watch')+'</button>'+
    (rad?'<button class="altvlc" data-vlc="'+esc(it.u)+
     '">Open in VLC</button>':'')+'</div>'}
  $('grid').insertAdjacentHTML('beforeend',h);
@@ -647,7 +647,7 @@ function test(u,manual){
   if(e0)setDot(u,'nonhttp','?','Direct/VLC stream');
   return Promise.resolve()}
  var el=findDot(u);
- if(manual&&el){el.className='dot checking';el.textContent='\\u25CB'}
+ if(manual&&el){el.className='dot checking';el.textContent='\u25CB'}
  var c=fresh(u);if(c&&!manual)return Promise.resolve();
  var controller=new AbortController();
  S.checkAbort[u]=controller;
@@ -656,7 +656,7 @@ function test(u,manual){
   .then(function(j){S.chk[u]={ok:j.ok,code:j.code,ms:j.ms,t:Date.now()};
    lsSet('iptv-chk',S.chk);
    setDot(u,j.ok===true?'online':(j.ok===false?'dead':'unknown'),
-    j.ok===true?'\\u2713':(j.ok===false?'\\u2715':'~'),
+    j.ok===true?'\u2713':(j.ok===false?'\u2715':'~'),
     'HTTP '+j.code+(j.ms?', '+j.ms+' ms':''))})
   .catch(function(err){if(err&&err.name!=='AbortError')setDot(u,'unknown','~','Check failed')})
   .then(function(){delete S.checkAbort[u]})}
@@ -760,7 +760,7 @@ function toggleFav(u){var i=-1;
   for(var k2=0;k2<src.length;k2++)if(src[k2].u===u){
    var o=src[k2];o.tp=o.tp||plTypeOf(S.pl);
    S.favs.unshift({n:o.n,u:o.u,l:o.l,g:o.g,tp:o.tp});
-   toast('\\u2605 Added to favorites');break}}
+   toast('\u2605 Added to favorites');break}}
  lsSet('iptv-favs',S.favs);
  document.querySelectorAll('.fav').forEach(function(b){
   b.classList.toggle('on',S.favs.some(function(f){return f.u===b.dataset.u}))});
@@ -833,7 +833,7 @@ function drawGuide(){
  for(var r2=0;r2<rows.length;r2++){var rr=rows[r2];
   h+='<div class="grow" data-u="'+esc(rr.u)+'"><b title="'+esc(rr.n)+'">'+
    esc(rr.n)+'</b>'+
-   '<span class="np">'+(rr.a.n?('\\u25B6 '+esc(rr.a.n.t)+
+   '<span class="np">'+(rr.a.n?('\u25B6 '+esc(rr.a.n.t)+
     ' <span class=tm>till '+hhmm(rr.a.n.e)+'</span>'):'')+'</span>'+
    '<span class="nx">'+(rr.a.x?('next: '+esc(rr.a.x.t)+
     ' <span class=tm>@ '+hhmm(rr.a.x.s)+'</span>'):'')+'</span></div>'}
@@ -1038,12 +1038,12 @@ function money(n,cur){
  if(n==null||isNaN(n))return'-';
  var s=(Math.abs(n)>=1000)?
   n.toLocaleString('en-IN',{maximumFractionDigits:2}):n.toFixed(2);
- return(cur==='INR'?'\\u20B9':cur==='USD'?'$':'')+s}
+ return(cur==='INR'?'\u20B9':cur==='USD'?'$':'')+s}
 function chgHtml(pr,pv){
  if(pr==null||!pv)return'<span class="mchg">-</span>';
  var d=pr-pv,p=d/pv*100,up=d>=0;
  return'<span class="mchg '+(up?'up':'down')+'">'+
-  (up?'\\u25B2 ':'\\u25BC ')+Math.abs(p).toFixed(2)+'%</span>'}
+  (up?'\u25B2 ':'\u25BC ')+Math.abs(p).toFixed(2)+'%</span>'}
 function sparkV(vals,w,h){
  if(!vals||vals.length<2)return'';
  var mn=Math.min.apply(null,vals),mx=Math.max.apply(null,vals);
@@ -1082,7 +1082,7 @@ function mkRow(q,label,canRm){
   '<div class="mkid"><b>'+esc(label||q.name||q.sym)+'</b>'+
   '<span class="mkst '+(live?'live':'off')+'">'+(live?'LIVE':'CLOSED')+
   '</span>'+fav+(canRm?'<button class="rm" data-sym="'+esc(q.sym)+
-  '" title="Remove">\\u2715</button>':'')+'</div>'+
+  '" title="Remove">\u2715</button>':'')+'</div>'+
   '<div class="mknum"><span class="mkp">'+money(q.price,q.cur)+'</span>'+
   chgHtml(q.price,q.prev)+'<small>O '+money(q.open,q.cur)+
   ' H '+money(q.high,q.cur)+' L '+money(q.low,q.cur)+
