@@ -3806,8 +3806,7 @@ def register_market_routes(app):
         except Exception as exc:
             raise HTTPException(status_code=502, detail=str(exc))
 
-if FastAPI is not None:
-
+def register_movie_routes(app):
     @app.get("/api/movies/search")
     async def fastapi_movies_search(q: str = "", type: str = "all", page: int = 1):
         if not MOVIEBOX_ENABLED:
@@ -3826,10 +3825,12 @@ if FastAPI is not None:
         except Exception as exc:
             raise HTTPException(status_code=502, detail=str(exc)[:180])
 
+if FastAPI is not None:
     fastapi_app = FastAPI(title="Sg_ent_media_radio API", version=VERSION)
     register_livestream_routes(fastapi_app)
     register_book_routes(fastapi_app)
     register_market_routes(fastapi_app)
+    register_movie_routes(fastapi_app)
 else:
     fastapi_app = None
 
