@@ -1263,6 +1263,12 @@ body[data-mode=podcasts] #panel-podcasts{display:block}
  .utilitygrid{grid-template-columns:1fr 1fr}
  #guide,#set,#themebtn,#help{display:none}
  body.playing #toast{bottom:180px}
+ #chips{margin:0 -2px;padding-bottom:5px}
+ #chips button{min-height:34px;padding:7px 10px}
+ .note{font-size:12px;line-height:1.45}
+ .grp{height:26px;white-space:normal;line-height:13px}
+ .dot,.fav{min-width:30px;min-height:30px}
+ .watch,.altvlc{min-height:40px}
  body{padding-top:env(safe-area-inset-top)}
  .card:hover{transform:none}
  .ni:hover,.mkrow:hover{transform:none}
@@ -3003,6 +3009,20 @@ class Handler(BaseHTTPRequestHandler):
         if u.path == "/healthz":
             return self.send(200, "ok", "text/plain; charset=utf-8")
 
+        if u.path == "/js_check.js":
+            try:
+                source = Path(__file__).with_name("js_check.js").read_text(
+                    encoding="utf-8")
+                source = (source
+                          .replace("__PL__", qs.get("pl", ["{}"])[0])
+                          .replace("__CLOUD__", qs.get("cloud", ["false"])[0]))
+                return self.send(200, source,
+                                 "application/javascript; charset=utf-8",
+                                 [("Cache-Control", "no-cache")])
+            except OSError as exc:
+                return self.send(500, json.dumps({"error": str(exc)}),
+                                 "application/json")
+
         if u.path == "/media-proxy":
             source = qs.get("url", [""])[0].strip()
             parsed = urlparse(source)
@@ -3136,6 +3156,12 @@ class Handler(BaseHTTPRequestHandler):
             page = (SHELL.replace("__PL__", pl_json)
                          .replace("__QRBLOCKS__", "".join(blocks))
                          .replace("__CLOUD__", "true" if IS_CLOUD else "false"))
+            script_url = "/js_check.js?pl=%s&cloud=%s" % (
+                quote(pl_json, safe=""), "true" if IS_CLOUD else "false")
+            page = re.sub(
+                r"<script>\s*var PL=.*?</script>",
+                '<script src="%s"></script>' % script_url,
+                page, count=1, flags=re.S)
             self.send(200, page)
 
         elif u.path == "/add":
