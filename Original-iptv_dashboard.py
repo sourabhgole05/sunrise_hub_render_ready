@@ -7,7 +7,7 @@
 #  Gutendex (Project Gutenberg)
 #  Self-test:  python iptv_dashboard.py --selftest
 # ============================================================
-import asyncio, html as H, json, os, re, shutil, socket, subprocess, sys, threading, time
+import html as H, json, os, re, shutil, socket, subprocess, sys, threading, time
 import traceback, base64, io, calendar, gzip
 import mimetypes, tempfile, uuid
 from pathlib import Path
@@ -36,16 +36,6 @@ try:
 except ImportError:
     feedparser = None
 try:
-    from movie_box.v1 import Search as MovieBoxSearch
-    from movie_box.v1 import Session as MovieBoxSession
-    from movie_box.v1 import SubjectType as MovieBoxSubjectType
-    from movie_box.v1 import Trending as MovieBoxTrending
-except ImportError:
-    MovieBoxSearch = None
-    MovieBoxSession = None
-    MovieBoxSubjectType = None
-    MovieBoxTrending = None
-try:
     from fastapi import FastAPI, BackgroundTasks, HTTPException, Query
     from fastapi.responses import FileResponse
 except ImportError:
@@ -55,7 +45,7 @@ except ImportError:
     Query = None
     FileResponse = None
 
-VERSION   = "12.0"
+VERSION   = "11.0"
 CACHE_TTL = 1800
 IS_CLOUD  = os.environ.get("RENDER", "").lower() == "true"
 SRV, PORT = None, int(os.environ.get("PORT", "8765")) if IS_CLOUD else 8765
@@ -827,100 +817,6 @@ def book_text(bid):
         BOOK_TXT.pop(BOOK_TXT_ORDER.pop(0), None)
     return txt
 
-
-# ---------------- MOVIEBOX (optional, isolated provider) ----------------
-# MovieBox is an external educational package. Sunrise Hub only uses its
-# discovery/metadata APIs here. It does NOT proxy, download, or re-host media.
-MOVIEBOX_ENABLED = MovieBoxSearch is not None and MovieBoxSession is not None
-
-def _moviebox_subject_type(kind):
-    if not MovieBoxSubjectType:
-        return None
-    k = (kind or "all").strip().lower()
-    return {
-        "movie": MovieBoxSubjectType.MOVIES,
-        "movies": MovieBoxSubjectType.MOVIES,
-        "series": MovieBoxSubjectType.TV_SERIES,
-        "tv": MovieBoxSubjectType.TV_SERIES,
-        "tv_series": MovieBoxSubjectType.TV_SERIES,
-        "all": MovieBoxSubjectType.ALL,
-    }.get(k, MovieBoxSubjectType.ALL)
-
-def _moviebox_normalize_item(item):
-    if not isinstance(item, dict):
-        return {"title": str(item)}
-    def pick(*keys):
-        for k in keys:
-            v = item.get(k)
-            if v not in (None, ""):
-                return v
-        return None
-    return {
-        "title": pick("title", "name") or "Untitled",
-        "id": pick("subjectId", "id"),
-        "subject_type": pick("subjectType", "type"),
-        "page_url": pick("pageUrl", "page_url", "url"),
-        "poster": pick("cover", "coverUrl", "poster", "posterUrl", "image"),
-        "release_date": pick("releaseDate", "release_date", "year"),
-        "rating": pick("rating", "imdbRating", "score"),
-        "genre": pick("genre", "genres"),
-    }
-
-def _moviebox_run(coro_factory):
-    if not MOVIEBOX_ENABLED:
-        raise RuntimeError("MovieBox provider is not installed")
-    async def runner():
-        session = MovieBoxSession(timeout=15.0)
-        try:
-            return await coro_factory(session)
-        finally:
-            try:
-                await session._client.aclose()
-            except Exception:
-                pass
-    return asyncio.run(runner())
-
-def moviebox_search(query, kind="all", page=1):
-    query = (query or "").strip()[:80]
-    if not query:
-        return {"items": [], "pager": {}, "source": "moviebox"}
-    subject_type = _moviebox_subject_type(kind)
-    page = max(1, min(int(page or 1), 50))
-    def work(session):
-        async def go():
-            provider = MovieBoxSearch(
-                session=session,
-                query=query,
-                subject_type=subject_type,
-                page=page,
-                per_page=24,
-            )
-            return await provider.get_content()
-        return go()
-    data = _moviebox_run(work)
-    items = data.get("items", []) if isinstance(data, dict) else []
-    pager = data.get("pager", {}) if isinstance(data, dict) else {}
-    return {
-        "query": query,
-        "items": [_moviebox_normalize_item(x) for x in items],
-        "pager": pager,
-        "source": "moviebox",
-    }
-
-def moviebox_trending():
-    def work(session):
-        async def go():
-            provider = MovieBoxTrending(session=session, page=0, per_page=24)
-            return await provider.get_content()
-        return go()
-    data = _moviebox_run(work)
-    items = data.get("items", []) if isinstance(data, dict) else []
-    return {
-        "items": [_moviebox_normalize_item(x) for x in items],
-        "pager": data.get("pager", {}) if isinstance(data, dict) else {},
-        "source": "moviebox",
-    }
-
 # ---------------- misc ----------------
 def qr_datauri(url):
     try:
@@ -1384,22 +1280,6 @@ body[data-mode=podcasts] #panel-podcasts{display:block}
 .podtext p{margin:0;}
 .podsource{margin:10px 0;}
 .podsource h4{margin:0 0 5px 0;color:var(--acc);}
-
-/* ===== MOVIES V2 ===== */
-#panel-movies{display:none;padding:8px 0 96px}
-#panel-movies .pbar2{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:10px 18px}
-#mvq{flex:1;min-width:180px;padding:9px 12px;border-radius:10px;border:1px solid var(--line);background:var(--card);color:var(--txt)}
-#mvtype{padding:8px 10px;font-size:12px}
-.mv-card{position:relative;text-align:left;min-height:270px}
-.mv-card img{width:100%;height:190px;object-fit:cover;border-radius:10px;background:var(--bg)}
-.mv-title{font-size:13px;font-weight:800;line-height:17px;min-height:34px}
-.mv-meta{font-size:11px;color:var(--mut);line-height:15px;min-height:30px}
-.mv-open{margin-top:auto;width:100%;text-align:center}
-@media(max-width:760px){
- #panel-movies .pbar2{padding:8px 10px}
- #mvq{width:100%;min-width:0;order:-1}
- .mv-card img{height:170px}
-}
 </style></head><body data-mode="media">
 <header>
  <div id="mainnav">
@@ -1409,7 +1289,6 @@ body[data-mode=podcasts] #panel-podcasts{display:block}
   <button data-mode="podcasts">&#127911; Podcasts</button>
   <button data-mode="markets">&#128200; Markets</button>
   <button data-mode="books">&#128218; Books</button>
-  <button data-mode="movies">&#127916; Movies</button>
  </div>
  <div class="row1">
   <button class="hdrbtn" id="home" title="Home" onclick="navigateTo('home')">&#x1F3E0;</button>
@@ -1464,30 +1343,6 @@ body[data-mode=podcasts] #panel-podcasts{display:block}
   <button class="big grey" id="bkprev">&lsaquo; Prev</button>
   <span id="bkpage"></span>
   <button class="big grey" id="bknext">Next &rsaquo;</button></div>
-</div>
-
-<div class="panel" id="panel-movies">
- <div class="pbar2">
-  <input id="mvq" placeholder="Search movies or TV series…" autocomplete="off">
-  <select id="mvtype" class="mini">
-   <option value="all">Movies + Series</option>
-   <option value="movie">Movies</option>
-   <option value="series">TV Series</option>
-  </select>
-  <button class="big" id="mvsearch">Search</button>
-  <button class="big blue" id="mvtrend">Trending</button>
- </div>
- <div class="note"><span id="mvstatus">Movie catalog provider ready when configured.</span></div>
- <div id="mvgrid" class="grid books"><div class="pempty">Search for a movie or series.</div></div>
- <div class="bpager">
-  <button class="big grey" id="mvprev">‹ Prev</button>
-  <span id="mvpage"></span>
-  <button class="big grey" id="mvnext">Next ›</button>
- </div>
- <div class="pempty" style="margin:10px 18px">
-  Sunrise Hub integrates MovieBox for discovery/metadata only. Playback or downloads are not
-  proxied by Sunrise Hub. Use content only where you have the legal right to access it.
- </div>
 </div>
 <div class="panel" id="panel-podcasts">
  <h3>Latest stories and podcasts</h3>
@@ -2901,7 +2756,7 @@ function bPaint(){
   var fav=PS.isFavorite('books',b)?'⭐':'☆';
   h+='<div class="card book" data-id="'+b.id+'">'+
    (b.cov?'<img src="'+esc(b.cov)+'" loading="lazy" '+
-    'onerror="this.replaceWith(document.createElement(\\"div\\"))">':
+    'onerror="this.replaceWith(document.createElement(\\'div\\'))">':
     '<div class="nocov">&#128214;</div>')+
    '<div class="cname" title="'+esc(b.t)+'">'+esc(b.t)+'</div>'+
    '<div class="grp">'+esc(b.a)+'</div>'+
@@ -3124,67 +2979,6 @@ new IntersectionObserver(function(es){es.forEach(function(e){
  $('mlinks').innerHTML=h;
 })();
 window.load=load;load('in');setMode('tv');maybeWelcome();
-
-/* ===== MOVIES V2: isolated MovieBox discovery layer ===== */
-var MV={page:1,kind:'all',query:'',items:[],pager:{}};
-function mvEsc(s){return esc(s==null?'':String(s))}
-function mvCard(x){
- var poster=x.poster||'';
- var img=poster?'<img loading="lazy" src="'+mvEsc(poster)+'" alt="">':'<div style="height:190px;border-radius:10px;background:var(--bg);display:grid;place-items:center;font-size:42px">🎬</div>';
- var meta=[];
- if(x.release_date)meta.push(String(x.release_date).slice(0,10));
- if(x.rating)meta.push('★ '+x.rating);
- if(x.genre)meta.push(Array.isArray(x.genre)?x.genre.join(', '):String(x.genre));
- var href=x.page_url;
- return '<div class="card mv-card">'+img+
-   '<div class="mv-title">'+mvEsc(x.title)+'</div>'+
-   '<div class="mv-meta">'+mvEsc(meta.join(' • '))+'</div>'+
-   (href?'<a class="big mv-open" href="'+mvEsc(href)+'" target="_blank" rel="noopener">Open provider page</a>':'')+
-   '</div>';
-}
-function mvRender(){
- var g=$('mvgrid'),items=MV.items||[];
- $('mvpage').textContent=MV.page+' '+(MV.pager&&MV.pager.totalCount?' / '+MV.pager.totalCount:'');
- if(!items.length){g.innerHTML='<div class="pempty">No results. Try another title.</div>';return}
- g.innerHTML=items.map(mvCard).join('');
-}
-function mvRequest(path){
- $('mvstatus').textContent='Loading movie catalog…';
- fetch(path).then(function(r){
-   return r.json().then(function(j){if(!r.ok)throw new Error(j.error||'Provider error');return j})
- }).then(function(j){
-   MV.items=j.items||[];MV.pager=j.pager||{};mvRender();
-   $('mvstatus').textContent=(MV.items.length||0)+' results • source: '+(j.source||'provider');
- }).catch(function(e){
-   $('mvgrid').innerHTML='<div class="errbox"><h3>Movie provider unavailable</h3><p>'+mvEsc(e.message||'Unknown error')+'</p><br><button class="big" onclick="mvShowTrending()">Retry</button></div>';
-   $('mvstatus').textContent='Movie provider unavailable. Existing Sunrise Hub features are unaffected.';
- });
-}
-function mvSearch(){
- var q=($('mvq').value||'').trim();
- if(!q){mvShowTrending();return}
- MV.query=q;MV.kind=$('mvtype').value;MV.page=1;
- mvRequest('/api/movies/search?q='+encodeURIComponent(q)+'&type='+encodeURIComponent(MV.kind)+'&page=1');
-}
-function mvShowTrending(){
- MV.query='';MV.kind='all';MV.page=1;
- mvRequest('/api/movies/trending');
-}
-function mvPage(delta){
- var p=MV.page+delta;
- if(p<1)return;
- if(!MV.query){return}
- MV.page=p;
- mvRequest('/api/movies/search?q='+encodeURIComponent(MV.query)+'&type='+encodeURIComponent(MV.kind)+'&page='+p);
-}
-window.mvShowTrending=mvShowTrending;
-window.addEventListener('load',function(){
- if($('mvsearch'))$('mvsearch').onclick=mvSearch;
- if($('mvtrend'))$('mvtrend').onclick=mvShowTrending;
- if($('mvq'))$('mvq').addEventListener('keydown',function(e){if(e.key==='Enter')mvSearch()});
- if($('mvprev'))$('mvprev').onclick=function(){mvPage(-1)};
- if($('mvnext'))$('mvnext').onclick=function(){mvPage(1)};
-});
 </script></body></html>"""
 
 class Handler(BaseHTTPRequestHandler):
@@ -3646,47 +3440,6 @@ class Handler(BaseHTTPRequestHandler):
             self.send(200, json.dumps(check_stream(url)),
                       "application/json")
 
-
-        elif u.path == "/api/movies/search":
-            if not MOVIEBOX_ENABLED:
-                return self.send(503, json.dumps({
-                    "error": "MovieBox provider is not installed",
-                    "source": "moviebox"
-                }), "application/json")
-            query = qs.get("q", [""])[0].strip()[:80]
-            kind = qs.get("type", ["all"])[0].strip().lower()
-            try:
-                page = max(1, min(int(qs.get("page", ["1"])[0] or 1), 50))
-            except Exception:
-                page = 1
-            if not query:
-                return self.send(400, '{"error":"missing query"}', "application/json")
-            try:
-                result = moviebox_search(query, kind, page)
-                self.send(200, json.dumps(result, ensure_ascii=True),
-                          "application/json")
-            except Exception as e:
-                self.send(502, json.dumps({
-                    "error": "Movie provider request failed: %s" % str(e)[:180],
-                    "source": "moviebox"
-                }), "application/json")
-
-        elif u.path == "/api/movies/trending":
-            if not MOVIEBOX_ENABLED:
-                return self.send(503, json.dumps({
-                    "error": "MovieBox provider is not installed",
-                    "source": "moviebox"
-                }), "application/json")
-            try:
-                result = moviebox_trending()
-                self.send(200, json.dumps(result, ensure_ascii=True),
-                          "application/json")
-            except Exception as e:
-                self.send(502, json.dumps({
-                    "error": "Movie provider request failed: %s" % str(e)[:180],
-                    "source": "moviebox"
-                }), "application/json")
-
         elif u.path == "/quit":
             self.send(200, "<h3 style='font-family:sans-serif'>Stopped.</h3>")
             if SRV is not None:
@@ -3807,25 +3560,6 @@ def register_market_routes(app):
             raise HTTPException(status_code=502, detail=str(exc))
 
 if FastAPI is not None:
-
-    @app.get("/api/movies/search")
-    async def fastapi_movies_search(q: str = "", type: str = "all", page: int = 1):
-        if not MOVIEBOX_ENABLED:
-            raise HTTPException(status_code=503, detail="MovieBox provider is not installed")
-        try:
-            return await asyncio.to_thread(moviebox_search, q[:80], type, max(1, min(page, 50)))
-        except Exception as exc:
-            raise HTTPException(status_code=502, detail=str(exc)[:180])
-
-    @app.get("/api/movies/trending")
-    async def fastapi_movies_trending():
-        if not MOVIEBOX_ENABLED:
-            raise HTTPException(status_code=503, detail="MovieBox provider is not installed")
-        try:
-            return await asyncio.to_thread(moviebox_trending)
-        except Exception as exc:
-            raise HTTPException(status_code=502, detail=str(exc)[:180])
-
     fastapi_app = FastAPI(title="Sg_ent_media_radio API", version=VERSION)
     register_livestream_routes(fastapi_app)
     register_book_routes(fastapi_app)
@@ -3943,10 +3677,9 @@ def selftest():
         sc += _res("Books API", gc > 100, "%d hindi books" % gc)
     except Exception as e:
         _res("Books API", False, str(e)[:40])
-    sc += _res("MovieBox module", True, "installed" if MOVIEBOX_ENABLED else "optional/unavailable")
     sc += _res("Internet", net_ok(), "OK" if net_ok() else "offline")
     log("-" * 46)
-    log("RESULT: %s (%d/14 passed)" %
+    log("RESULT: %s (%d/13 passed)" %
         ("READY TO RUN" if sc >= 9 else "REVIEW WARNINGS ABOVE", sc))
     return 0 if sc >= 9 else 1
 
