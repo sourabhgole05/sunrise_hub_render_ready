@@ -112,6 +112,8 @@ window.PS=PS;
 // ============================================================
 // GLOBAL MEDIA PLAYER + QUEUE SERVICE
 // ============================================================
+var AU=new Audio();AU.preload='auto';AU.playbackRate=1;
+AU.volume=parseFloat(localStorage.getItem('iptv-vol')||'0.85');
 var GM={
  player:AU,
  queue:[],
@@ -399,8 +401,6 @@ function showGlobalSearch(){
    this.innerHTML='\\u263D';localStorage.setItem('iptv-theme','dark')}}})();
 
 /* ===== RADIO ENGINE v3 ===== */
-var AU=new Audio();AU.preload='auto';AU.playbackRate=1;
-AU.volume=parseFloat(localStorage.getItem('iptv-vol')||'0.85');
 var PB={on:false,cur:null,tries:0,timer:null,wd:null,bt:null,
         lastT:-1,stall:0,fired:false,vlcTried:false};
 function pbSet(txt,live){
