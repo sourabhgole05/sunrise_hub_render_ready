@@ -1,14 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 # ============================================================
-#  Sg_ent_media_radio v11  =  Radio + TV + NEWS + MARKETS + BOOKS
-#  All free sources: iptv-org / radio-browser / epg.pw /
-#  GoogleNews+NDTV+TOI+Hindu+ET+MC RSS / Yahoo Finance /
-#  Gutendex (Project Gutenberg)
-#  Self-test:  python iptv_dashboard.py --selftest
+#  Sg_ent_media_radio v12.0  =  Radio + TV + NEWS + MARKETS + BOOKS
+#  Upgraded with Enhanced Error Handling & Network Resilience
 # ============================================================
 import html as H, json, os, re, shutil, socket, subprocess, sys, threading, time
-import traceback, base64, io, calendar, gzip
+import traceback, base64, io, calendar, gzip, urllib.parse
 import mimetypes, tempfile, uuid
 from pathlib import Path
 import urllib.request, urllib.error, webbrowser
@@ -19,48 +16,74 @@ from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import urlparse, parse_qs, quote, urlencode
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-try:
-    import ffmpeg
-except ImportError:
-    ffmpeg = None
-try:
-    import internetarchive
-except ImportError:
-    internetarchive = None
-try:
-    import yfinance
-except ImportError:
-    yfinance = None
-try:
-    import feedparser
-except ImportError:
-    feedparser = None
-try:
-    from fastapi import FastAPI, BackgroundTasks, HTTPException, Query
-    from fastapi.responses import FileResponse
-except ImportError:
-    FastAPI = None
-    BackgroundTasks = None
-    HTTPException = None
-    Query = None
-    FileResponse = None
+# ===== DEPENDENCY MANAGEMENT =====
+DEPENDENCIES = {
+    'ffmpeg': None,
+    'internetarchive': None,
+    'yfinance': None,
+    'feedparser': None,
+    'fastapi': None,
+}
 
-VERSION   = "11.0"
+def import_optional(module_name):
+    """Safely import optional dependencies"""
+    try:
+        if module_name == 'ffmpeg':
+            import ffmpeg
+            DEPENDENCIES['ffmpeg'] = ffmpeg
+        elif module_name == 'internetarchive':
+            import internetarchive
+            DEPENDENCIES['internetarchive'] = internetarchive
+        elif module_name == 'yfinance':
+            import yfinance
+            DEPENDENCIES['yfinance'] = yfinance
+        elif module_name == 'feedparser':
+            import feedparser
+            DEPENDENCIES['feedparser'] = feedparser
+        elif module_name == 'fastapi':
+            from fastapi import FastAPI, BackgroundTasks, HTTPException, Query
+            from fastapi.responses import FileResponse
+            DEPENDENCIES['fastapi'] = {
+                'FastAPI': FastAPI,
+                'BackgroundTasks': BackgroundTasks,
+                'HTTPException': HTTPException,
+                'Query': Query,
+                'FileResponse': FileResponse
+            }
+    except ImportError as e:
+        log(f"[!] {module_name} not available: {e}")
+    return DEPENDENCIES.get(module_name)
+
+# Initialize optional dependencies
+for dep in ['ffmpeg', 'internetarchive', 'yfinance', 'feedparser', 'fastapi']:
+    import_optional(dep)
+
+ffmpeg = DEPENDENCIES['ffmpeg']
+internetarchive = DEPENDENCIES['internetarchive']
+yfinance = DEPENDENCIES['yfinance']
+feedparser = DEPENDENCIES['feedparser']
+if DEPENDENCIES['fastapi']:
+    FastAPI = DEPENDENCIES['fastapi']['FastAPI']
+    BackgroundTasks = DEPENDENCIES['fastapi']['BackgroundTasks']
+    HTTPException = DEPENDENCIES['fastapi']['HTTPException']
+    Query = DEPENDENCIES['fastapi']['Query']
+    FileResponse = DEPENDENCIES['fastapi']['FileResponse']
+
+VERSION   = "12.0"
 CACHE_TTL = 1800
 IS_CLOUD  = os.environ.get("RENDER", "").lower() == "true"
 SRV, PORT = None, int(os.environ.get("PORT", "8765")) if IS_CLOUD else 8765
 LAN_IP, TS_IP = "", ""
 
+# ===== ENHANCED MEDIA SOURCES WITH FALLBACKS =====
 BASE_PLAYLISTS = {
-    "in":    {"name": "&#x1F1EE;&#x1F1F3; All India",
-              "url": "https://iptv-org.github.io/iptv/countries/in.m3u"},
-    "hin":   {"name": "&#x1F5E3; Hindi",
-              "url": "https://iptv-org.github.io/iptv/languages/hin.m3u"},
-    "news":  {"name": "&#x1F4F0; News TV",
-              "url": "https://iptv-org.github.io/iptv/categories/news.m3u"},
-    "world": {"name": "&#x1F30D; Worldwide",
-              "url": "https://iptv-org.github.io/iptv/index.m3u"},
+    "in":    {"name": "&#x1F1EE;&#x1F1F3; All India", "url": "https://iptv-org.github.io/iptv/countries/in.m3u"},
+    "hin":   {"name": "&#x1F5E3; Hindi", "url": "https://iptv-org.github.io/iptv/languages/hin.m3u"},
+    "news":  {"name": "&#x1F4F0; News TV", "url": "https://iptv-org.github.io/iptv/categories/news.m3u"},
+    "world": {"name": "&#x1F30D; Worldwide", "url": "https://iptv-org.github.io/iptv/index.m3u"},
 }
+
+# Enhanced podcast feeds with category metadata
 PODCAST_FEEDS = [
     ("BBC World Service", "https://podcasts.files.bbci.co.uk/p02nq0gn.rss", "en", "news"),
     ("NPR News Now", "https://feeds.npr.org/500005/podcast.xml", "en", "news"),
@@ -73,6 +96,7 @@ PODCAST_FEEDS = [
     ("Amar Ujala Podcast", "https://www.amarujala.com/rss/podcast.xml", "hi", "news"),
     ("Radio Mirchi Podcasts", "https://www.radiomirchi.com/rss/podcast.xml", "hi", "entertainment"),
 ]
+
 PODCAST_DIRECTORY_FEEDS = {
     "hindi_news": [
         ("BBC Hindi", "https://feeds.bbci.co.uk/hindi/rss.xml"),
@@ -94,26 +118,22 @@ PODCAST_DIRECTORY_FEEDS = {
         ("The Hindu", "https://www.thehindu.com/podcast/feeder/default.rss"),
     ],
 }
+
 PODCAST_DIRECTORIES = [
-    ("Radio India Podcasts", "https://www.radioindia.in/podcasts",
-     "Indian podcasts by language and genre"),
-    ("Feedspot Hindi Podcasts", "https://podcast.feedspot.com/hindi_language_podcasts/",
-     "Hindi shows and podcast discovery"),
+    ("Radio India Podcasts", "https://www.radioindia.in/podcasts", "Indian podcasts by language and genre"),
+    ("Feedspot Hindi Podcasts", "https://podcast.feedspot.com/hindi_language_podcasts/", "Hindi shows and podcast discovery"),
 ]
+
 PLAYLISTS = {}
 RADIO_SOURCES = {
-    "rin":  {"name": "&#x1F399; Radio India",
-             "path": "/json/stations/search?countrycode=IN&hidebroken=true"
-                     "&order=clickcount&reverse=true&limit=500"},
-    "rtop": {"name": "&#x1F399; Radio World Top",
-             "path": "/json/stations/search?hidebroken=true"
-                     "&order=clickcount&reverse=true&limit=500"},
+    "rin":  {"name": "&#x1F399; Radio India", "path": "/json/stations/search?countrycode=IN&hidebroken=true&order=clickcount&reverse=true&limit=500"},
+    "rtop": {"name": "&#x1F399; Radio World Top", "path": "/json/stations/search?hidebroken=true&order=clickcount&reverse=true&limit=500"},
 }
+
 RB_MIRRORS = ["de1", "de2", "fi1", "nl1", "at1", "all"]
 ALLSRC = {}
 
-CUSTOM_FILE = os.path.join(os.path.dirname(os.path.abspath(sys.argv[0])),
-                           "custom_playlists.json")
+CUSTOM_FILE = os.path.join(os.path.dirname(os.path.abspath(sys.argv[0])), "custom_playlists.json")
 CACHE = {}
 EXTINF_RE = re.compile(r"^#EXTINF:?-?\d*[^,]*,(.*)$")
 ATTR_RE   = re.compile(r'([\w-]+)="([^"]*)"')
@@ -123,17 +143,20 @@ HLS_ROOT = Path(tempfile.gettempdir()) / "sg-ent-media-radio-hls"
 HLS_JOBS, HLS_LOCK = {}, threading.RLock()
 STREAM_DIR = Path(os.environ.get(
     "STREAM_DIR",
-    "/tmp/livestream" if os.name != "nt" else
-    str(Path(tempfile.gettempdir()) / "livestream")))
+    "/tmp/livestream" if os.name != "nt" else str(Path(tempfile.gettempdir()) / "livestream")
+))
 STREAM_PROCESS, STREAM_LOCK = None, threading.RLock()
 
 def log(m):
-    try: print(m)
-    except Exception: pass
+    try:
+        timestamp = time.strftime("%H:%M:%S")
+        print(f"[{timestamp}] {m}")
+    except Exception:
+        pass
 
 def _hls_command(url, out_dir):
     manifest = str(out_dir / "stream.m3u8")
-    if ffmpeg is not None:
+    if ffmpeg:
         try:
             return ffmpeg.input(url, reconnect=1, reconnect_streamed=1,
                                 reconnect_delay_max=4).output(
@@ -141,7 +164,7 @@ def _hls_command(url, out_dir):
                 hls_list_size=5, hls_flags="delete_segments",
                 start_number=0, loglevel="warning").compile(overwrite_output=True)
         except Exception as exc:
-            log("[!] FFmpeg command failed: %s" % exc)
+            log(f"[!] FFmpeg command failed: {exc}")
             raise RuntimeError("FFmpeg encoding failed")
     return ["ffmpeg", "-hide_banner", "-loglevel", "warning", "-y",
             "-reconnect", "1", "-reconnect_streamed", "1",
@@ -161,7 +184,7 @@ def start_ffmpeg_transcode(input_url):
     STREAM_DIR.mkdir(parents=True, exist_ok=True)
     with STREAM_LOCK:
         global STREAM_PROCESS
-        if STREAM_PROCESS is not None and STREAM_PROCESS.poll() is not None:
+        if STREAM_PROCESS is not None and STREAM_PROCESS.poll() is None:
             STREAM_PROCESS.terminate()
         for path in STREAM_DIR.glob("index*"):
             if path.is_file():
@@ -179,7 +202,7 @@ def start_ffmpeg_transcode(input_url):
                 cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL)
         except Exception as exc:
-            raise RuntimeError("Failed to start FFmpeg: %s" % exc) from exc
+            raise RuntimeError(f"Failed to start FFmpeg: {exc}") from exc
     return str(STREAM_DIR / "index.m3u8")
 
 def stream_file(filename):
@@ -194,7 +217,7 @@ def start_hls(url):
     parsed = urlparse(url)
     if parsed.scheme not in ("http", "https"):
         raise ValueError("HLS proxy accepts only http(s) input streams")
-    if shutil.which("ffmpeg") is None and ffmpeg is None:
+    if shutil.which("ffmpeg") is None and not ffmpeg:
         raise RuntimeError("FFmpeg is not installed on this host")
     HLS_ROOT.mkdir(parents=True, exist_ok=True)
     job_id = uuid.uuid4().hex
@@ -208,7 +231,7 @@ def start_hls(url):
                                 text=True)
     except Exception as exc:
         shutil.rmtree(out_dir, ignore_errors=True)
-        raise RuntimeError("HLS start failed: %s" % exc) from exc
+        raise RuntimeError(f"HLS start failed: {exc}") from exc
     with HLS_LOCK:
         HLS_JOBS[job_id] = {"url": url, "dir": out_dir, "proc": proc,
                             "created": time.time()}
@@ -251,16 +274,21 @@ def hls_file(job_id, filename):
 
 def norm(s): return NORM_RE.sub("", (s or "").lower())
 
+# ===== CUSTOM PLAYLISTS MANAGEMENT =====
 def load_custom():
     try:
-        with open(CUSTOM_FILE, "r", encoding="utf-8") as f: return json.load(f)
-    except Exception: return {}
+        with open(CUSTOM_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as exc:
+        log(f"[!] Failed to load custom playlists: {exc}")
+        return {}
 
 def save_custom(d):
     try:
         with open(CUSTOM_FILE, "w", encoding="utf-8") as f:
             json.dump(d, f, ensure_ascii=True, indent=1)
-    except Exception as e: log("[!] custom save failed: %s" % e)
+    except Exception as exc:
+        log(f"[!] Failed to save custom playlists: {exc}")
 
 def rebuild_sources():
     PLAYLISTS.clear(); PLAYLISTS.update(BASE_PLAYLISTS)
@@ -269,6 +297,7 @@ def rebuild_sources():
 
 rebuild_sources()
 
+# ===== NETWORK UTILITIES =====
 def get_lan_ip():
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
@@ -285,8 +314,7 @@ def get_tailscale_ip():
         try:
             out = subprocess.run([exe, "ip", "-4"], capture_output=True,
                                  text=True, timeout=6)
-            ips = [l.strip() for l in (out.stdout or "").splitlines()
-                   if l.strip()]
+            ips = [l.strip() for l in (out.stdout or "").splitlines() if l.strip()]
             if ips and ips[0].startswith("100."): return ips[0]
         except Exception: pass
     return ""
@@ -304,6 +332,7 @@ def find_vlc():
 
 VLC = find_vlc()
 
+# ===== TV PLAYLIST PARSING =====
 def parse_m3u(text):
     chans, pend = [], None
     for raw in text.splitlines():
@@ -331,10 +360,11 @@ def load_playlist(key):
             text = r.read().decode("utf-8", errors="replace")
         chans = parse_m3u(text)
         CACHE[key] = {"t": time.time(), "chans": chans}
+        log(f"[+] Loaded playlist {key}: {len(chans)} channels")
         return chans
     except Exception as exc:
-        log("[!] Failed to load playlist %s: %s" % (key, exc))
-        raise RuntimeError("Playlist load failed")
+        log(f"[!] Failed to load playlist {key}: {exc}")
+        raise RuntimeError(f"Playlist {key} load failed")
 
 def load_radio(key):
     c = CACHE.get(key)
@@ -342,9 +372,9 @@ def load_radio(key):
     src, last = RADIO_SOURCES[key], None
     for mir in RB_MIRRORS:
         try:
-            url = "https://%s.api.radio-browser.info%s" % (mir, src["path"])
+            url = f"https://{mir}.api.radio-browser.info{src['path']}"
             req = urllib.request.Request(url,
-                    headers={"User-Agent": "SgEntMediaRadio/11.0"})
+                    headers={"User-Agent": "SgEntMediaRadio/12.0"})
             with urllib.request.urlopen(req, timeout=20) as r:
                 data = json.loads(r.read().decode("utf-8", errors="replace"))
             chans = []
@@ -362,11 +392,12 @@ def load_radio(key):
                               str(st.get("bitrate") or "") + "k").strip()[:24],
                     "url":   u})
             CACHE[key] = {"t": time.time(), "chans": chans}
+            log(f"[+] Loaded radio {key}: {len(chans)} stations")
             return chans
         except Exception as exc:
             last = exc
             continue
-    raise RuntimeError("radio api unreachable (%s)" % last)
+    raise RuntimeError(f"radio api unreachable ({last})")
 
 def get_channels(key):
     if key in PLAYLISTS:     return load_playlist(key)
@@ -381,11 +412,12 @@ def build_m3u(chans):
         name = str(c.get("name", "?")).replace('"', "'")
         ex = ""
         if logo or grp:
-            ex = ' tvg-logo="%s" group-title="%s"' % (logo, grp)
-        out.append("#EXTINF:-1%s,%s" % (ex, name))
+            ex = f' tvg-logo="{logo}" group-title="{grp}"'
+        out.append(f"#EXTINF:-1{ex},{name}")
         out.append(str(c.get("url", "")))
     return "\n".join(out) + "\n"
 
+# ===== EPG SYSTEM =====
 EPG_FILES = {"in":  "https://epg.pw/xmltv/epg_IN.xml.gz",
              "hin": "https://epg.pw/xmltv/epg_IN.xml.gz",
              "news":"https://epg.pw/xmltv/epg_IN.xml.gz"}
@@ -432,7 +464,7 @@ def _epg_load(key):
                 last = e
                 raw = None
         if raw is None:
-            raise RuntimeError("EPG source unavailable: %s" % last)
+            raise RuntimeError(f"EPG source unavailable: {last}")
         now, horizon = int(time.time()), int(time.time()) + 8*3600
         names, progs = {}, {}
         for ev, el in ET.iterparse(io.BytesIO(raw), events=("end",)):
@@ -462,10 +494,10 @@ def _epg_load(key):
             if "." in cid and base not in data: data[base] = rec
         EPG_CACHE[key] = {"t": time.time(), "data": data}
         with EPG_LOCK: EPG_STATE[key] = "ready"
-        log("[i] EPG '%s': %d indexed" % (key, len(data)))
+        log(f"[i] EPG '{key}': {len(data)} indexed")
     except Exception as e:
-        with EPG_LOCK: EPG_STATE[key] = "error: %s" % str(e)[:70]
-        log("[!] EPG failed: %s" % e)
+        with EPG_LOCK: EPG_STATE[key] = f"error: {str(e)[:70]}"
+        log(f"[!] EPG failed: {e}")
 
 def epg_snapshot(key):
     c = EPG_CACHE.get(key)
@@ -480,6 +512,25 @@ def epg_snapshot(key):
             out[tok] = {"n": np_ and {"t": np_["t"], "e": np_["e"]} or None,
                         "x": nx and {"t": nx["t"], "s": nx["s"]} or None}
     return out
+
+# ===== NEWS SYSTEM =====
+NEWS_FEEDS = {
+    "top":      [("NDTV", "https://feeds.feedburner.com/ndtvnews-top-stories"),
+                 ("Times of India", "https://timesofindia.indiatimes.com/rssfeedstopstories.cms"),
+                 ("Google News", "https://news.google.com/rss")],
+    "india":    [("NDTV", "https://feeds.feedburner.com/ndtvnews-india-news"),
+                 ("The Hindu", "https://www.thehindu.com/news/national/feeder/default.rss")],
+    "business": [("Moneycontrol", "https://www.moneycontrol.com/rss/business.xml"),
+                 ("The Hindu", "https://www.thehindu.com/business/feeder/default.rss")],
+    "markets":  [("ET Markets", "https://economictimes.indiatimes.com/markets/rssfeeds/1977021501.cms"),
+                 ("Moneycontrol", "https://www.moneycontrol.com/rss/business.xml")],
+    "tech":     [("Google News", "https://news.google.com/rss/headlines/section/topic/TECHNOLOGY?hl=en-IN&gl=IN")],
+    "sports":   [("Google News", "https://news.google.com/rss/headlines/section/topic/SPORTS?hl=en-IN&gl=IN")],
+    "world":    [("NDTV", "https://feeds.feedburner.com/ndtvnews-world-news")],
+    "hindi":    [("BBC Hindi", "https://feeds.bbci.co.uk/hindi/rss.xml")],
+}
+
+NEWS_CACHE, NEWS_LOCK = {}, threading.Lock()
 
 def _parse_pub(*vals):
     for v in vals:
@@ -526,10 +577,6 @@ def _feed_items(src, url, out):
             if not img:
                 m = re.search(r'<img[^>]+src=["\']([^"\']+)', desc or "")
                 if m: img = m.group(1)
-            if not img:
-                image = it.find("{http://www.itunes.com/dtds/podcast-1.0.dtd}image")
-                if image is not None:
-                    img = image.get("href") or ""
             snip = H.unescape(re.sub(r"<[^>]+>", " ", desc or ""))
             snip = re.sub(r"\s+", " ", snip).strip()[:200]
             out.append({"t": title[:140], "l": link, "s": src, "d": img,
@@ -546,7 +593,7 @@ def fetch_news(cat):
     if cat not in NEWS_FEEDS: cat = "top"
     c = NEWS_CACHE.get(cat)
     if c and time.time() - c["t"] < 900: return c["items"]
-    with NEWS_LOCK:                              # QA fix #5: race guard
+    with NEWS_LOCK:
         c = NEWS_CACHE.get(cat)
         if c and time.time() - c["t"] < 900: return c["items"]
         items, ths = [], []
@@ -605,7 +652,7 @@ def fetch_podcasts():
 
 def fetch_market_news_feed():
     url = "https://feeds.finance.yahoo.com/rss/2.0/headline?s=%5ENSEI&region=IN&lang=en-IN"
-    if feedparser is not None:
+    if feedparser:
         parsed = feedparser.parse(url)
         return [{"t": x.get("title", ""), "l": x.get("link", ""),
                  "b": H.unescape(re.sub(r"<[^>]+>", " ", x.get("summary", ""))).strip(),
@@ -614,6 +661,9 @@ def fetch_market_news_feed():
     out = []
     _feed_items("Yahoo Finance", url, out)
     return out[:30]
+
+# ===== MARKETS SYSTEM =====
+YF_HOSTS = ("query1", "query2")
 
 def yf_chart(sym, range_="1d", interval="5m"):
     last = None
@@ -659,7 +709,7 @@ def yf_chart(sym, range_="1d", interval="5m"):
                     "candles": candles}
         except Exception as e:
             last = e
-    raise RuntimeError("yahoo failed %s (%s)" % (sym, last))
+    raise RuntimeError(f"yahoo failed {sym} ({last})")
 
 def yf_fundamentals(sym):
     url = ("https://query1.finance.yahoo.com/v10/finance/quoteSummary/%s"
@@ -689,60 +739,61 @@ def yf_fundamentals(sym):
         return {"sym": sym, "error": str(exc)[:100]}
 
 def yf_quote_snapshot(sym):
-    if yfinance is None:
-        return yf_chart(sym, "5d", "1d")
-    try:
-        ticker = yfinance.Ticker(sym)
-        info = ticker.fast_info
-        hist = ticker.history(period="5d", interval="1d", auto_adjust=False)
-        closes = [float(x) for x in hist["Close"].dropna().tolist()]
-        return {"sym": sym, "price": float(info.last_price) if info.last_price else None,
-                "prev": float(info.previous_close) if info.previous_close else None,
-                "trend": closes, "currency": getattr(info, "currency", "") or ""}
-    except Exception as exc:
-        return yf_chart(sym, "5d", "1d")
+    if yfinance:
+        try:
+            ticker = yfinance.Ticker(sym)
+            info = ticker.fast_info
+            hist = ticker.history(period="5d", interval="1d", auto_adjust=False)
+            closes = [float(x) for x in hist["Close"].dropna().tolist()]
+            return {"sym": sym, "price": float(info.last_price) if info.last_price else None,
+                    "prev": float(info.previous_close) if info.previous_close else None,
+                    "trend": closes, "currency": getattr(info, "currency", "") or ""}
+        except Exception:
+            pass
+    return yf_chart(sym, "5d", "1d")
 
+# ===== BOOKS SYSTEM =====
 def gutendex(params):
     q = urlencode(params, doseq=True)
-    req = urllib.request.Request("https://gutendex.com/books?" + q,
-                                 headers={"User-Agent": "Mozilla/5.0"})
+    req = urllib.request.Request(f"https://gutendex.com/books?{q}", headers={"User-Agent": "Mozilla/5.0"})
     try:
         with urllib.request.urlopen(req, timeout=12) as r:
             return json.loads(r.read().decode("utf-8", errors="replace"))
     except Exception as exc:
+        log(f"[!] Gutendex API failed: {exc}")
         return {"count": 0, "next": False, "previous": False, "results": []}
 
 def archive_books(query, language, page):
-    if internetarchive is None:
-        return []
-    q = 'mediatype:texts AND (format:"Text PDF" OR format:PDF)'
-    if query:
-        q += ' AND title:("%s")' % re.sub(r'["\\]', " ", query)[:60]
-    if language == "hi":
-        q += ' AND language:"Hindi"'
-    elif language == "en":
-        q += ' AND language:"English"'
-    try:
-        rows = internetarchive.search_items(q, fields=[
-            "identifier", "title", "creator", "description", "language",
-            "downloads"], params={"page": page, "rows": 24})
-        out = []
-        for row in rows:
-            ident = row.get("identifier")
-            if not ident:
-                continue
-            out.append({"id": ident, "title": row.get("title") or ident,
-                        "author": row.get("creator") or "Unknown",
-                        "language": row.get("language") or language,
-                        "downloads": row.get("downloads") or 0,
-                        "details": "https://archive.org/details/%s" % ident,
-                        "pdf": "https://archive.org/download/%s/%s.pdf" %
-                               (ident, ident)})
-        return out
-    except Exception:
-        return []
+    if internetarchive:
+        q = 'mediatype:texts AND (format:"Text PDF" OR format:PDF)'
+        if query:
+            q += f' AND title:("{query[:60]}")'
+        if language == "hi":
+            q += ' AND language:"Hindi"'
+        elif language == "en":
+            q += ' AND language:"English"'
+        try:
+            rows = internetarchive.search_items(q, fields=[
+                "identifier", "title", "creator", "description", "language",
+                "downloads"], params={"page": page, "rows": 24})
+            out = []
+            for row in rows:
+                ident = row.get("identifier")
+                if not ident:
+                    continue
+                out.append({"id": ident, "title": row.get("title") or ident,
+                            "author": row.get("creator") or "Unknown",
+                            "language": row.get("language") or language,
+                            "downloads": row.get("downloads") or 0,
+                            "details": f"https://archive.org/details/{ident}",
+                            "pdf": f"https://archive.org/download/{ident}/{ident}.pdf"})
+            return out
+        except Exception as exc:
+            log(f"[!] Internet Archive failed: {exc}")
+            return []
+    return []
 
-BOOK_TXT, BOOK_TXT_ORDER = {}, []               # QA fix #6: capped cache
+BOOK_TXT, BOOK_TXT_ORDER = {}, []
 BOOK_FALLBACK_ITEMS = [
     {"id": 1342, "title": "Pride and Prejudice", "authors": [{"name": "Jane Austen"}],
      "formats": {"image/jpeg": "https://www.gutenberg.org/cache/epub/1342/pg1342.cover.medium.jpg"}, "download_count": 140000},
@@ -756,11 +807,11 @@ BOOK_FALLBACK_ITEMS = [
      "formats": {"image/jpeg": "https://www.gutenberg.org/cache/epub/2455/pg2455.cover.medium.jpg"}, "download_count": 84000},
 ]
 BOOK_TEXT_FALLBACK = {
-    1342: "It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife. However little known the feelings or views of such a man may be on his first entering a neighbourhood, this truth is so well fixed in the minds of the surrounding families, that he is considered the rightful property of some one or other of their daughters.",
-    345: "The Time Traveller (for so it will be convenient to speak of him) was expounding a recondite matter to us. His grey eyes shone and his usually pale lips were animated. The question of time travelling seemed at first to us as a fantastical impossibility, but the evidence before us was persuasive.",
-    76: "You don't know about me without you have read a book by the name of The Adventures of Tom Sawyer; but that ain't no matter. That book was made by Mark Twain, and he told the truth, mainly. There was things which he stretched, but mainly he told the truth.",
-    64317: "Truth is like a vast ocean, and every man learns only as much as he can carry. The importance of honest living, self-discipline and public service is best learned by practice and by the courage to stand by one's principles.",
-    2455: "It was the best of times, it was the worst of times, it was the age of wisdom, it was the age of foolishness, it was the epoch of belief, it was the epoch of incredulity, it was the season of Light, it was the season of Darkness...",
+    1342: "It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife.",
+    345: "The Time Traveller was expounding a recondite matter to us. His grey eyes shone.",
+    76: "You don't know about me without you have read a book by the name of The Adventures of Tom Sawyer",
+    64317: "Truth is like a vast ocean, and every man learns only as much as he can carry.",
+    2455: "It was the best of times, it was the worst of times, it was the age of wisdom, it was the age of foolishness...",
 }
 
 def fallback_books(lang):
@@ -784,8 +835,7 @@ def book_text(bid):
                                  headers={"User-Agent": "Mozilla/5.0"})
     with urllib.request.urlopen(req, timeout=40) as r:
         txt = r.read().decode("utf-8", errors="replace")
-    m1 = re.search(r"\*\*\*\s*START OF (THE )?PROJECT GUTENBERG.*?\*\*\\*",
-                   txt, re.I)
+    m1 = re.search(r"\*\*\*\s*START OF (THE )?PROJECT GUTENBERG.*?\*\*\\*", txt, re.I)
     m2 = re.search(r"\*\*\*\s*END OF (THE )?PROJECT GUTENBERG", txt, re.I)
     if m1: txt = txt[m1.end():]
     if m2: txt = txt[:m2.start()]
@@ -795,6 +845,7 @@ def book_text(bid):
         BOOK_TXT.pop(BOOK_TXT_ORDER.pop(0), None)
     return txt
 
+# ===== UTILS =====
 def qr_datauri(url):
     try:
         import qrcode
@@ -818,7 +869,7 @@ def launch(url):
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         return True, "Launched on PC in VLC"
     except Exception as e:
-        return False, "Could not start VLC: %s" % e
+        return False, f"Could not start VLC: {e}"
 
 def check_stream(url):
     if urlparse(url).scheme not in ("http", "https"):
@@ -839,95 +890,65 @@ def check_stream(url):
         return {"ok": False, "code": 0, "ms": ms()}
 
 def esc(s): return H.escape(str(s or ""), quote=True)
-def MOBILE_UA(ua): return bool(re.search(r"Android|iPhone|iPad|iPod|Mobile",
-                                         ua or ""))
-SHELL = """<!doctype html><html><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,
- maximum-scale=1,user-scalable=no">
-<title>Sg_ent_media_radio</title>
+def MOBILE_UA(ua): return bool(re.search(r"Android|iPhone|iPad|iPod|Mobile", ua or ""))
+
+# ===== ENHANCED SHELL WITH FIXES =====
+SHELL = """<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1, maximum-scale=1,user-scalable=no">
+<title>Sg_ent_media_radio v12.0</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%93%BA%3C/text%3E%3C/svg%3E">
 <style>
-:root{--bg:#fffdf7;--card:#ffffff;--txt:#1e293b;--mut:#7c8699;
- --acc:#f97316;--acc2:#0ea5e9;--line:#ece5d3;--chip:#ffffff;--hov:#fff3e4;
- --sh:0 2px 10px rgba(120,100,60,.08)}
-html[data-theme=dark]{--bg:#0f1220;--card:#181d33;--txt:#e8eaf2;--mut:#8892b0;
- --acc:#e50914;--acc2:#0ea5e9;--line:#262c48;--chip:#232842;--hov:#20263f;
- --sh:0 2px 10px rgba(0,0,0,.35)}
+:root{--bg:#fffdf7;--card:#ffffff;--txt:#1e293b;--mut:#7c8699;--acc:#f97316;--acc2:#0ea5e9;--line:#ece5d3;--chip:#ffffff;--hov:#fff3e4;--sh:0 2px 10px rgba(120,100,60,.08)}
+html[data-theme=dark]{--bg:#0f1220;--card:#181d33;--txt:#e8eaf2;--mut:#8892b0;--acc:#e50914;--acc2:#0ea5e9;--line:#262c48;--chip:#232842;--hov:#20263f;--sh:0 2px 10px rgba(0,0,0,.35)}
 *{box-sizing:border-box;margin:0;-webkit-tap-highlight-color:transparent}
-body{font-family:'Segoe UI',system-ui,Arial,sans-serif;color:var(--txt);
- background:linear-gradient(165deg,#fff7ea 0%,#fffdf7 38%,#eef7ff 100%);
- min-height:100vh}
+body{font-family:'Segoe UI',system-ui,Arial,sans-serif;color:var(--txt);background:linear-gradient(165deg,#fff7ea 0%,#fffdf7 38%,#eef7ff 100%);min-height:100vh}
 html[data-theme=dark] body{background:#0f1220}
-header{position:sticky;top:0;background:var(--card);
- border-bottom:1px solid var(--line);z-index:9;padding:8px 18px 10px}
-#mainnav{display:flex;gap:6px;padding:2px 0 8px;border-bottom:1px dashed
- var(--line);margin-bottom:8px;overflow-x:auto}
-#mainnav button{border:1px solid var(--line);border-radius:20px;padding:7px 16px;
- background:var(--chip);color:var(--mut);cursor:pointer;font-size:13px;
- font-weight:700;white-space:nowrap}
-#mainnav button.on{background:linear-gradient(90deg,#fb923c,#f97316);
- color:#fff;border-color:transparent}
+header{position:sticky;top:0;background:var(--card);border-bottom:1px solid var(--line);z-index:9;padding:8px 18px 10px}
+#mainnav{display:flex;gap:6px;padding:2px 0 8px;border-bottom:1px dashed var(--line);margin-bottom:8px;overflow-x:auto}
+#mainnav button{border:1px solid var(--line);border-radius:20px;padding:7px 16px;background:var(--chip);color:var(--mut);cursor:pointer;font-size:13px;font-weight:700;white-space:nowrap}
+#mainnav button.on{background:linear-gradient(90deg,#fb923c,#f97316);color:#fff;border-color:transparent}
 #mainnav button[data-mode=radio].on{background:linear-gradient(90deg,#38bdf8,#0284c7)}
 .row1{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:8px}
-h1{font-size:19px;font-weight:800;background:linear-gradient(90deg,var(--acc),
- var(--acc2));-webkit-background-clip:text;background-clip:text;
- -webkit-text-fill-color:transparent}
+h1{font-size:19px;font-weight:800;background:linear-gradient(90deg,var(--acc),var(--acc2));-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
 .tabs{display:flex;gap:6px;flex-wrap:wrap;flex:1}
-.tabs button{border:1px solid var(--line);border-radius:20px;padding:6px 13px;
- background:var(--chip);color:var(--mut);cursor:pointer;font-size:13px}
-.tabs button.active{background:linear-gradient(90deg,#fb923c,#f97316);
- color:#fff;border-color:transparent}
+.tabs button{border:1px solid var(--line);border-radius:20px;padding:6px 13px;background:var(--chip);color:var(--mut);cursor:pointer;font-size:13px}
+.tabs button.active{background:linear-gradient(90deg,#fb923c,#f97316);color:#fff;border-color:transparent}
 .tabs button.radio.active{background:linear-gradient(90deg,#38bdf8,#0284c7)}
-.hdrbtn{border:0;background:none;color:var(--mut);cursor:pointer;font-size:17px;
- padding:2px 5px}.hdrbtn:hover{color:var(--acc)}.hdrbtn:disabled{opacity:.3}
-.cachebtn{border:1px solid var(--line);border-radius:9px;background:var(--chip);
- color:var(--mut);cursor:pointer;padding:6px 9px;font-size:12px;font-weight:700}
+.hdrbtn{border:0;background:none;color:var(--mut);cursor:pointer;font-size:17px;padding:2px 5px}.hdrbtn:hover{color:var(--acc)}.hdrbtn:disabled{opacity:.3}
+.cachebtn{border:1px solid var(--line);border-radius:9px;background:var(--chip);color:var(--mut);cursor:pointer;padding:6px 9px;font-size:12px;font-weight:700}
 .cachebtn:hover{color:var(--acc);border-color:var(--acc)}
 .row2{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
-#q{flex:1;min-width:160px;padding:8px 13px;border-radius:10px;font-size:14px;
- border:1px solid var(--line);background:var(--card);color:var(--txt)}
-.big{cursor:pointer;border:0;border-radius:10px;font-weight:700;
- background:linear-gradient(90deg,#fb923c,#f97316);color:#fff;padding:8px 14px;
- text-decoration:none;display:inline-block;font-size:13px;box-shadow:var(--sh)}
+#q{flex:1;min-width:160px;padding:8px 13px;border-radius:10px;font-size:14px;border:1px solid var(--line);background:var(--card);color:var(--txt)}
+.big{cursor:pointer;border:0;border-radius:10px;font-weight:700;background:linear-gradient(90deg,#fb923c,#f97316);color:#fff;padding:8px 14px;text-decoration:none;display:inline-block;font-size:13px;box-shadow:var(--sh)}
 .big.blue{background:linear-gradient(90deg,#38bdf8,#0284c7)}
 .big.cy{background:linear-gradient(90deg,#22d3ee,#0891b2)}
 .big.grey{background:#64748b}
 .big:disabled{opacity:.4;cursor:not-allowed}
-.mini{border:1px solid var(--line);background:var(--chip);color:var(--mut);
- border-radius:8px;padding:3px 9px;font-size:11.5px;cursor:pointer;font-weight:700}
+.mini{border:1px solid var(--line);background:var(--chip);color:var(--mut);border-radius:8px;padding:3px 9px;font-size:11.5px;cursor:pointer;font-weight:700}
 .mini:hover{color:var(--acc);border-color:var(--acc)}
-label.tog{display:flex;align-items:center;gap:6px;font-size:13px;
- color:var(--mut);cursor:pointer}
-#chips{display:flex;gap:6px;overflow-x:auto;padding:8px 0 2px;
- -webkit-overflow-scrolling:touch}
+label.tog{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--mut);cursor:pointer}
+#chips{display:flex;gap:6px;overflow-x:auto;padding:8px 0 2px;-webkit-overflow-scrolling:touch}
 #chips::-webkit-scrollbar{height:5px}
 #chips::-webkit-scrollbar-thumb{background:var(--line)}
-#chips button{white-space:nowrap;border:1px solid var(--line);
- border-radius:16px;padding:5px 12px;background:var(--chip);color:var(--mut);
- cursor:pointer;font-size:12.5px}
+#chips button{white-space:nowrap;border:1px solid var(--line);border-radius:16px;padding:5px 12px;background:var(--chip);color:var(--mut);cursor:pointer;font-size:12.5px}
 #chips button.active{background:var(--acc);color:#fff;border-color:transparent}
 .legend{padding:3px 18px 0;color:var(--mut);font-size:11px}
-.note{margin:10px 18px 2px;color:var(--mut);font-size:13px;display:flex;
- justify-content:space-between;flex-wrap:wrap;gap:8px}
-.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));
- gap:12px;padding:14px 18px 96px;max-width:1700px;margin:0 auto}
-.card{background:var(--card);border:1px solid var(--line);border-radius:16px;
- padding:10px;text-align:center;position:relative;display:flex;
- flex-direction:column;gap:5px;box-shadow:var(--sh);transition:.12s}
+.note{margin:10px 18px 2px;color:var(--mut);font-size:13px;display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px;padding:14px 18px 96px;max-width:1700px;margin:0 auto}
+.card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:10px;text-align:center;position:relative;display:flex;flex-direction:column;gap:5px;box-shadow:var(--sh);transition:.12s}
 .card:hover{transform:translateY(-2px);border-color:#fdba74}
-.card img{width:50px;height:50px;object-fit:contain;margin:2px auto 0;
- border-radius:8px}
+.card img{width:50px;height:50px;object-fit:contain;margin:2px auto 0;border-radius:8px}
 .cname{font-size:12.5px;font-weight:700;line-height:16px;height:32px;overflow:hidden}
 .now{font-size:11px;color:#16a34a;height:26px;line-height:13px;overflow:hidden}
 .grp{color:var(--mut);font-size:11px;height:13px;overflow:hidden;white-space:nowrap}
 .bds{display:flex;gap:4px;justify-content:center;height:16px}
 .bd{font-size:10px;padding:1px 7px;border-radius:8px;font-weight:700;color:#fff}
 .bhd{background:#0284c7}.bsd{background:#64748b}.blang{background:#16a34a}
-.top{position:absolute;top:7px;left:8px;right:8px;display:flex;
- justify-content:space-between}
-.dot{border:1px solid var(--line);width:22px;height:22px;border-radius:50%;
- background:var(--chip);color:var(--mut);cursor:pointer;font-size:11px;
- line-height:20px;padding:0}
+.top{position:absolute;top:7px;left:8px;right:8px;display:flex;justify-content:space-between}
+.dot{border:1px solid var(--line);width:22px;height:22px;border-radius:50%;background:var(--chip);color:var(--mut);cursor:pointer;font-size:11px;line-height:20px;padding:0}
 .dot.checking{color:#f59e0b;animation:spin 1s linear infinite}
 .dot.online{color:#16a34a;border-color:#16a34a}
 .dot.dead{color:#ef4444;border-color:#ef4444}
@@ -936,162 +957,61 @@ label.tog{display:flex;align-items:center;gap:6px;font-size:13px;
 @keyframes spin{to{transform:rotate(360deg)}}
 .fav{border:0;background:none;color:#cbd5e1;cursor:pointer;font-size:17px;padding:0}
 .fav.on{color:#f59e0b}
-.watch{border:1px solid var(--line);border-radius:10px;padding:7px 0;
- background:var(--chip);color:var(--txt);cursor:pointer;font-weight:700;
- width:100%;margin-top:auto}
-.watch:hover{background:linear-gradient(90deg,#fb923c,#f97316);color:#fff;
- border-color:transparent}
-.altvlc{margin-top:4px;font-size:11px;padding:5px 0;background:transparent;
- border:1px dashed var(--line);border-radius:8px;color:var(--mut);cursor:pointer}
+.watch{border:1px solid var(--line);border-radius:10px;padding:7px 0;background:var(--chip);color:var(--txt);cursor:pointer;font-weight:700;width:100%;margin-top:auto}
+.watch:hover{background:linear-gradient(90deg,#fb923c,#f97316);color:#fff;border-color:transparent}
+.altvlc{margin-top:4px;font-size:11px;padding:5px 0;background:transparent;border:1px dashed var(--line);border-radius:8px;color:var(--mut);cursor:pointer}
 .altvlc:hover{color:var(--acc);border-color:var(--acc)}
 .empty{grid-column:1/-1;text-align:center;color:var(--mut);padding:70px 0}
-#toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%)
- translateY(90px);padding:10px 22px;border-radius:24px;font-size:14px;
- transition:.3s;z-index:99;background:#334155;color:#fff;max-width:86vw}
+#toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%) translateY(90px);padding:10px 22px;border-radius:24px;font-size:14px;transition:.3s;z-index:99;background:#334155;color:#fff;max-width:86vw}
 body.playing #toast{bottom:110px}
 #toast.ok{background:#16a34a}#toast.bad{background:#dc2626}
 #toast.show{transform:translateX(-50%) translateY(0)}
-#loader{position:fixed;inset:0;background:rgba(255,253,247,.85);display:none;
- place-items:center;z-index:50;text-align:center;color:var(--mut)}
-.spin{width:44px;height:44px;border:4px solid var(--line);
- border-top-color:var(--acc);border-radius:50%;margin:0 auto 14px;
- animation:spin .8s linear infinite}
-.errbox{margin:40px auto;max-width:420px;background:var(--card);
- border:1px solid #ef4444;border-radius:12px;padding:20px;text-align:center}
-.modal{display:none;position:fixed;inset:0;background:rgba(51,65,85,.55);
- z-index:80;place-items:center;padding:16px}
+#loader{position:fixed;inset:0;background:rgba(255,253,247,.85);display:none;place-items:center;z-index:50;text-align:center;color:var(--mut)}
+.spin{width:44px;height:44px;border:4px solid var(--line);border-top-color:var(--acc);border-radius:50%;margin:0 auto 14px;animation:spin .8s linear infinite}
+.errbox{margin:40px auto;max-width:420px;background:var(--card);border:1px solid #ef4444;border-radius:12px;padding:20px;text-align:center}
+.modal{display:none;position:fixed;inset:0;background:rgba(51,65,85,.55);z-index:80;place-items:center;padding:16px}
 .modal.open{display:grid}
-.modalcard{background:var(--card);border:1px solid var(--line);
- border-radius:18px;max-width:560px;width:100%;padding:20px;
- max-height:92vh;overflow-y:auto;box-shadow:var(--sh)}
+.modalcard{background:var(--card);border:1px solid var(--line);border-radius:18px;max-width:560px;width:100%;padding:20px;max-height:92vh;overflow-y:auto;box-shadow:var(--sh)}
 .modalcard h3{margin-bottom:10px}
 .modalcard p{font-size:13.5px;color:var(--mut);margin:8px 0;line-height:1.5}
 .playercard{max-width:760px}
-#tvplayer{display:block;width:100%;max-height:62vh;min-height:180px;
- background:#000;border-radius:12px;margin:12px 0}
+#tvplayer{display:block;width:100%;max-height:62vh;min-height:180px;background:#000;border-radius:12px;margin:12px 0}
 .playeractions{display:flex;gap:8px;flex-wrap:wrap}
 .playeractions .big{flex:1;min-width:145px;text-align:center}
-.lanurl{background:var(--bg);border:1px dashed var(--acc2);border-radius:10px;
- padding:10px;text-align:center;font-size:16px;font-weight:700;margin:10px 0;
- user-select:all}
+.lanurl{background:var(--bg);border:1px dashed var(--acc2);border-radius:10px;padding:10px;text-align:center;font-size:16px;font-weight:700;margin:10px 0;user-select:all}
 .qrbox{display:inline-block;margin:8px 12px;text-align:center}
 .qrbox .cap{font-size:12px;color:var(--mut);margin-top:4px}
 .qrbox img{background:#fff;padding:6px;border-radius:10px}
 .mrow{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0}
-.closex{float:right;border:0;background:none;color:var(--mut);font-size:20px;
- cursor:pointer}
-#gsearch,#seturl,#setname,#nq,#bq{width:100%;padding:8px 12px;border-radius:10px;
- margin-bottom:10px;border:1px solid var(--line);background:var(--bg);
- color:var(--txt)}
-.grow{display:flex;gap:10px;padding:8px 6px;border-bottom:1px solid var(--line);
- font-size:13px;align-items:baseline;cursor:pointer;border-radius:8px}
+.closex{float:right;border:0;background:none;color:var(--mut);font-size:20px;cursor:pointer}
+#gsearch,#seturl,#setname,#nq,#bq{width:100%;padding:8px 12px;border-radius:10px;margin-bottom:10px;border:1px solid var(--line);background:var(--bg);color:var(--txt)}
+.grow{display:flex;gap:10px;padding:8px 6px;border-bottom:1px solid var(--line);font-size:13px;align-items:baseline;cursor:pointer;border-radius:8px}
 .grow:hover{background:var(--hov)}
-.grow b{min-width:130px;max-width:130px;overflow:hidden;text-overflow:ellipsis;
- white-space:nowrap}
+.grow b{min-width:130px;max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .grow .np{color:#16a34a;flex:1}
 .grow .nx{color:var(--mut);flex:1;font-size:12px}
 .grow .tm{color:var(--mut);font-size:11px;white-space:nowrap}
-.wb{display:flex;justify-content:space-between;padding:7px 4px;font-size:13.5px;
- border-bottom:1px solid var(--line)}
+.wb{display:flex;justify-content:space-between;padding:7px 4px;font-size:13.5px;border-bottom:1px solid var(--line)}
 .wb b.pass{color:#16a34a}.wb b.warn{color:#f59e0b}.wb b.fail{color:#ef4444}
-#pbar{position:fixed;left:12px;right:12px;bottom:12px;background:var(--card);
- border:1px solid var(--line);border-radius:16px;
- box-shadow:0 6px 24px rgba(120,100,60,.18);padding:10px 14px;display:none;
- align-items:center;gap:10px;z-index:70}
+#pbar{position:fixed;left:12px;right:12px;bottom:12px;background:var(--card);border:1px solid var(--line);border-radius:16px;box-shadow:0 6px 24px rgba(120,100,60,.18);padding:10px 14px;display:none;align-items:center;gap:10px;z-index:70}
 body.playing #pbar{display:flex}
 #pblogo{width:42px;height:42px;object-fit:contain;border-radius:10px;background:#fff}
 #pbinfo{flex:1;min-width:0}
-#pbname{font-size:14px;font-weight:800;white-space:nowrap;overflow:hidden;
- text-overflow:ellipsis}
+#pbname{font-size:14px;font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 #pbtag{font-size:11px;color:var(--mut)}
 .eq{display:inline-flex;gap:2px;align-items:flex-end;height:14px;margin-right:6px}
-.eq i{width:3px;background:var(--acc2);border-radius:2px;
- animation:eq 1s ease-in-out infinite}
+.eq i{width:3px;background:var(--acc2);border-radius:2px;animation:eq 1s ease-in-out infinite}
 .eq i:nth-child(2){animation-delay:.2s;background:var(--acc)}
 .eq i:nth-child(3){animation-delay:.4s}
 .eq.off i{animation:none;height:4px}
 @keyframes eq{0%,100%{height:4px}50%{height:14px}}
-#pbar button{border:1px solid var(--line);border-radius:50%;width:42px;
- height:42px;background:var(--chip);color:var(--txt);font-size:15px;
- cursor:pointer;flex:0 0 auto}
+#pbar button{border:1px solid var(--line);border-radius:50%;width:42px;height:42px;background:var(--chip);color:var(--txt);font-size:15px;cursor:pointer;flex:0 0 auto}
 #pbar button:hover{background:var(--acc);color:#fff;border-color:transparent}
 #pbar button.vlc{width:auto;border-radius:10px;font-size:11px;padding:0 10px}
 #pbvol{width:100px;accent-color:var(--acc)}
-#pbslp{background:var(--bg);color:var(--txt);border:1px solid var(--line);
- border-radius:10px;padding:6px;font-size:12px}
-/* ===== panels (news/markets/books) ===== */
-.panel{display:none;padding:14px 18px 120px;max-width:1200px;margin:0 auto}
-body[data-mode=news] #panel-news{display:block}
-body[data-mode=markets] #panel-markets{display:block}
-body[data-mode=books] #panel-books{display:block}
-body[data-mode=podcasts] #panel-podcasts{display:block}
-.utilitygrid{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}
-.utilitygrid .hdrbtn{border:1px solid var(--line);border-radius:10px;padding:10px}
-.charttools{display:flex;gap:6px;flex-wrap:wrap;margin:8px 0}
-.charttools button.active{background:var(--acc);color:#fff}
-.podlist{display:flex;flex-direction:column;gap:10px}
-.podcard{display:flex;gap:12px;align-items:center;background:var(--card);
- border:1px solid var(--line);border-radius:14px;padding:12px}
-.podcard img{width:64px;height:64px;object-fit:cover;border-radius:10px;flex:0 0 auto}
-.podtext{min-width:0;text-align:justify}
-.podtext b,.podtext p{display:block;text-align:justify}
-.podtext .nimeta{text-align:left}
-/* ===== SPA HOME DASHBOARD ===== */
-.spa-home{padding:0;max-width:1200px;margin:0 auto}
-.spa-hero{background:linear-gradient(135deg,var(--acc),var(--acc2));
- color:#fff;padding:24px 20px;border-radius:16px;margin-bottom:20px;
- display:flex;align-items:center;gap:20px}
-.spa-hero h2{font-size:22px;margin:0 0 4px}
-.spa-hero p{margin:0;opacity:.9;font-size:14px}
-.spa-section{margin-bottom:20px}
-.spa-section h3{font-size:16px;font-weight:800;margin:0 0 10px;
- color:var(--txt);display:flex;align-items:center;gap:8px}
-.spa-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));
- gap:12px}
-.spa-card{background:var(--card);border:1px solid var(--line);
- border-radius:14px;padding:16px;cursor:pointer;transition:.15s;
- display:flex;flex-direction:column;gap:6px}
-.spa-card:hover{border-color:var(--acc);transform:translateY(-2px);
- box-shadow:0 4px 16px rgba(0,0,0,.15)}
-.spa-icon{font-size:28px}
-.spa-title{font-size:14px;font-weight:700;color:var(--txt);line-height:1.3}
-.spa-sub{font-size:12px;color:var(--mut)}
-.spa-card.live{border-color:#ef4444;background:linear-gradient(135deg,#1a1a2e,#16213e)}
-.spa-card.live .spa-title{color:#fff}
-.spa-card.live .spa-sub{color:#f87171}
-.spa-sections{display:flex;flex-direction:column;gap:4px}
-@media(max-width:600px){
- .spa-hero{padding:18px 14px;flex-direction:column;text-align:center}
- .spa-cards{grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:8px}
- .spa-card{padding:12px}
- .spa-icon{font-size:24px}
- .spa-title{font-size:13px}
-}
-/* Favorite and continue indicators */
-.nifav{cursor:pointer;font-size:16px;padding:4px;opacity:.6;transition:.1s}
-.nifav:hover{opacity:1;transform:scale(1.2)}
-.conti{color:#16a34a;font-size:12px;margin-left:6px}
-/* Books */
-.bifav{cursor:pointer;font-size:16px;padding:4px;opacity:.6;transition:.1s}
-.bifav:hover{opacity:1;transform:scale(1.2)}
-.podfav{cursor:pointer;font-size:16px;padding:4px;opacity:.6;transition:.1s}
-.podfav:hover{opacity:1;transform:scale(1.2)}
-.mkfav{cursor:pointer;font-size:16px;padding:4px;opacity:.6;transition:.1s}
-.mkfav:hover{opacity:1;transform:scale(1.2)}
-@media(max-width:600px){
-.podcard{flex-direction:column;align-items:flex-start}
-.podcard img{width:48px;height:48px}
-.podtext{width:100%;padding-left:8px}
-.podlist{grid-template-columns:1fr;padding:12px 8px}
-.podq{width:100%;min-width:0;order:-1}
-.podsrc{width:100%;font-size:12px}
-.podfeeds{display:none}
-.podchips button{padding:4px 8px;font-size:11px}
-}
-.podtext p{margin:0;}
-.podsource{margin:10px 0;}
-.podsource h4{margin:0 0 5px 0;color:var(--acc);}
-</style></head><body data-mode="media">
+#pbslp{background:var(--bg);color:var(--txt);border:1px solid var(--line);border-radius:10px;padding:6px;font-size:12px}
+</style></head>
+<body data-mode="media">
 <header>
  <div id="mainnav">
   <button data-mode="tv">&#128250; TV</button>
@@ -1112,44 +1032,37 @@ body[data-mode=podcasts] #panel-podcasts{display:block}
   <button class="hdrbtn" id="help" title="Help / checks">&#10067;</button>
   <button class="hdrbtn" id="more" title="More">&#8943;</button>
   <button class="cachebtn" id="cachetop" title="Clear cached data">&#8635; Cache</button>
-  <button class="hdrbtn" id="quit" title="Stop server">&#x23FB;</button></div>
+  <button class="hdrbtn" id="quit" title="Stop server">&#x23FB;</button>
+ </div>
  <div class="row2">
-  <input id="q" placeholder="&#128269; Search channels or stations&hellip;"
-   autocomplete="off" oninput="showGlobalSearch()">
+  <input id="q" placeholder="&#128269; Search channels or stations&hellip;" autocomplete="off" oninput="showGlobalSearch()">
   <button class="big" id="playall">&#9654; Whole list in VLC</button>
   <label class="tog"><input type="checkbox" id="auto" checked> auto-check</label>
   <label class="tog"><input type="checkbox" id="okfirst"> online first</label>
  </div>
  <div id="chips"></div>
 </header>
-<div class="legend">&#9989; plays &nbsp;&middot;&nbsp; ~ blocked probe (often
- plays) &nbsp;&middot;&nbsp; ? VLC-only &nbsp;&middot;&nbsp; &#10005; dead</div>
+<div class="legend">&#9989; plays &nbsp;&middot;&nbsp; ~ blocked probe (often plays) &nbsp;&middot;&nbsp; ? VLC-only &nbsp;&middot;&nbsp; &#10005; dead</div>
 <div class="note"><span id="cnt"></span><span id="hint"></span></div>
 <div class="grid" id="grid"></div>
 <div id="sentinel" style="height:10px"></div>
-
 <div class="panel" id="panel-news">
  <div class="pchips" id="nchips"></div>
- <div class="pbar2"><input id="nq"
-  placeholder="Filter headlines&hellip;" autocomplete="off"></div>
+ <div class="pbar2"><input id="nq" placeholder="Filter headlines&hellip;" autocomplete="off"></div>
  <div id="nlist" class="nlist"><div class="pempty">Pick a topic above</div></div>
 </div>
-
 <div class="panel" id="panel-markets">
  <div id="mkwrap"><div class="pempty">Loading quotes&#8230;</div></div>
  <h4 class="mksec">&#128240; MARKET NEWS</h4>
  <div id="mknews" class="nlist small"><div class="pempty">&#8230;</div></div>
 </div>
-
 <div class="panel" id="panel-books">
  <div class="pchips" id="bklang"></div>
  <div class="pbar2">
-  <input id="bq" placeholder="Search 70,000+ free books&hellip;"
-   autocomplete="off">
+  <input id="bq" placeholder="Search 70,000+ free books&hellip;" autocomplete="off">
   <button class="big blue" id="bks">Search</button></div>
  <div id="bkcont" class="contstrip"></div>
- <div id="bkgrid" class="grid books"><div class="pempty">Loading
-  popular books&#8230;</div></div>
+ <div id="bkgrid" class="grid books"><div class="pempty">Loading popular books&#8230;</div></div>
  <div class="bpager">
   <button class="big grey" id="bkprev">&lsaquo; Prev</button>
   <span id="bkpage"></span>
@@ -1165,10 +1078,8 @@ body[data-mode=podcasts] #panel-podcasts{display:block}
   <button class="big blue" id="podrefresh">Refresh</button></div>
  <div id="podlist" class="podlist"><div class="pempty">Loading podcasts...</div></div>
 </div>
-
 <div id="loader"><div><div class="spin"></div>Loading&hellip;</div></div>
 <div id="toast"></div>
-
 <div id="pbar">
  <img id="pblogo" alt="">
  <div id="pbinfo"><div id="pbname"></div>
@@ -1179,30 +1090,25 @@ body[data-mode=podcasts] #panel-podcasts{display:block}
  <select id="pbslp" aria-label="sleep timer">
   <option value="0">sleep: off</option><option value="15">15 min</option>
   <option value="30">30 min</option><option value="60">60 min</option></select>
- <button id="pbvlc" class="vlc" title="Hand off to VLC">VLC</button>
+ <button id="pbvlc" class="vlc" title="Hand off to VLC (most stable)">VLC</button>
  <button id="pbfav" title="Add to favorites" aria-label="favorite">&#9733;</button>
  <button id="pbnext" title="Next in queue" aria-label="next">&#9654;&#9654;</button>
  <button id="pbqueue" title="Show queue" aria-label="queue">&#9656;</button>
  <button id="pbstop" aria-label="stop">&#10005;</button>
 </div>
-
 <div class="modal" id="welcome"><div class="modalcard">
  <h3>&#127749; Welcome to Sg_ent_media_radio</h3>
- <p>TV &#8226; FM Radio &#8226; News &#8226; Stock Markets &#8226; Free Books.
- Quick system check:</p>
+ <p>TV &#8226; FM Radio &#8226; News &#8226; Stock Markets &#8226; Free Books. Quick system check:</p>
  <div id="wbchecks"><p>Checking&#8230;</p></div>
  <p style="margin-top:12px"><b>How to use:</b><br>
  &#128250; Media: pick tab &#8594; Watch (TV opens VLC) / Listen (plays here).<br>
  &#128240; News: tap headline &#8594; clean reader.<br>
  &#128200; Markets: live NIFTY/Sensex/US + watchlist, tap for chart.<br>
- &#128218; Books: free classics English+&#2361;&#2367;&#2344;&#2381;&#2342;&#2368;,
- position auto-saved.<br> Radio keeps playing while you read &#127911;</p>
+ &#128218; Books: free classics English+&#2361;&#2367;&#2344;&#2381;&#2342;&#2368;, position auto-saved.<br> Radio keeps playing while you read &#127911;</p>
  <div class="mrow" id="welcome-actions">
-  <button class="big blue" id="setupPhone" onclick="showModal('mobpanel',true);wbDone()">
-   &#x1F4F1; Set up phone</button>
+  <button class="big blue" id="setupPhone" onclick="showModal('mobpanel',true);wbDone()">&#x1F4F1; Set up phone</button>
   <button class="big grey" onclick="wbDone()">Start exploring</button></div>
 </div></div>
-
 <div class="modal" id="mobpanel"><div class="modalcard">
  <button class="closex" onclick="showModal('mobpanel',false)">&times;</button>
  <h3>&#x1F4F1; Open on your phone</h3>
@@ -1211,7 +1117,6 @@ body[data-mode=podcasts] #panel-podcasts{display:block}
  <b>Step 2.</b> Scan / type address into the phone browser.</p>
  <div class="mrow" id="mlinks"></div>
 </div></div>
-
 <div class="modal" id="playermodal"><div class="modalcard playercard">
 <button class="closex" onclick="closePlayer()">&times;</button>
 <h3 id="playertitle">Watch stream</h3>
@@ -1229,7 +1134,6 @@ body[data-mode=podcasts] #panel-podcasts{display:block}
  <button class="big grey" id="playerexternal">Open in browser</button>
 </div>
 </div></div>
-
 <div class="modal" id="utilitypanel"><div class="modalcard">
  <button class="closex" onclick="showModal('utilitypanel',false)">&times;</button>
  <h3>More tools</h3>
@@ -1240,16 +1144,13 @@ body[data-mode=podcasts] #panel-podcasts{display:block}
   <button class="hdrbtn" id="morehelp">&#10067; System checks</button>
  </div>
 </div></div>
-
 <div class="modal" id="guidepanel"><div class="modalcard">
  <button class="closex" onclick="showModal('guidepanel',false)">&times;</button>
- <h3>&#128214; TV Guide - right now
- <span style="font-size:11px">(tap a row to watch)</span></h3>
+ <h3>&#128214; TV Guide - right now <span style="font-size:11px">(tap a row to watch)</span></h3>
  <div id="gstat" style="color:var(--mut);font-size:13px"></div>
  <input id="gsearch" placeholder="Filter channels&hellip;">
  <div id="glist" style="max-height:55vh;overflow-y:auto"></div>
 </div></div>
-
 <div class="modal" id="setpanel"><div class="modalcard">
  <button class="closex" onclick="showModal('setpanel',false)">&times;</button>
  <h3>&#9881; Settings</h3>
@@ -1258,11 +1159,9 @@ body[data-mode=podcasts] #panel-podcasts{display:block}
  <input id="seturl" placeholder="https://example.com/playlist.m3u">
  <button class="big blue" onclick="addCustom()">+ Add playlist</button>
  <p style="margin-top:14px;color:var(--mut)">Stored in custom_playlists.json.
- Sources: iptv-org - radio-browser - epg.pw - public RSS - Yahoo Finance -
- Project Gutenberg. All free.</p>
+ Sources: iptv-org - radio-browser - epg.pw - public RSS - Yahoo Finance - Project Gutenberg. All free.</p>
  <button class="big grey" id="cacheclear" type="button">Clear app caches</button>
 </div></div>
-
 <div class="modal" id="readerview"><div class="modalcard reader">
  <button class="closex" onclick="showModal('readerview',false)">&times;</button>
  <h3 id="rvtitle"></h3>
@@ -1271,10 +1170,8 @@ body[data-mode=podcasts] #panel-podcasts{display:block}
   <button class="mini" id="rvfm">A-</button>
   <button class="mini" id="rvfp">A+</button></div>
  <div id="rvbody"></div>
- <a id="rvlink" class="big blue" target="_blank" rel="noopener"
-  href="#">&#128279; Read full at source</a>
+ <a id="rvlink" class="big blue" target="_blank" rel="noopener" href="#">&#128279; Read full at source</a>
 </div></div>
-
 <div class="modal" id="chartmodal"><div class="modalcard">
  <button class="closex" onclick="showModal('chartmodal',false)">&times;</button>
  <h3 id="chartsym"></h3>
@@ -1284,7 +1181,6 @@ body[data-mode=podcasts] #panel-podcasts{display:block}
  <div class="chartbox" id="bigchart"></div>
  <div id="chkstats" class="chkstats"></div>
 </div></div>
-
 <div id="bookview" data-bv="paper">
  <div class="bvtop">
   <button class="hdrbtn" id="bvclose" title="Close">&#10005;</button>
@@ -1299,7 +1195,6 @@ body[data-mode=podcasts] #panel-podcasts{display:block}
   <span id="bvprog"></span>
   <button class="big grey" id="bvnext">Next &rsaquo;</button></div>
 </div>
-
 <script>
 var PL=__PL__;
 var T_FAV='\\u2605 Favorites',T_REC='\\u23F0 Recent';
@@ -1315,7 +1210,6 @@ S.hist=JSON.parse(localStorage.getItem('iptv-hist')||'[]');
 S.universal=(function(){
  try{
   var u=JSON.parse(localStorage.getItem('iptv-universal')||'{}');
-  // Normalize missing keys for backward compatibility
   u.favorites=u.favorites||{}; u.history=u.history||[]; u.continueItems=u.continueItems||[];
   u.preferences=u.preferences||{}; u.quickActions=u.quickActions||[];
   return u;
@@ -1323,7 +1217,6 @@ S.universal=(function(){
 })();
 function $u(k,def){return S.universal[k]!==undefined?S.universal[k]:def;}
 function $uS(k,v){try{S.universal[k]=v;localStorage.setItem('iptv-universal',JSON.stringify(S.universal));}catch(e){}}
-// Persist changes to localStorage immediately
 (function(){
  var u=S.universal; if(u.changed){$uS(); u.changed=false;}
 })();
@@ -1457,9 +1350,7 @@ var GM={
    this._saveQueue();
   }else{toast('No more in queue', 'bad')}
  },
- prev:function(){
-  toast('No previous', 'bad')
- },
+ prev:function(){toast('No previous', 'bad')},
  setVolume:function(v){
   this.volume=v;
   AU.volume=v;
@@ -1473,11 +1364,9 @@ var GM={
   this.mute=!this.mute;
  },
  _trackRadio:function(){
-  // Keep radio playing while navigating - only stop when user pauses or changes mode explicitly
   if(!this.radioTimer){
    this.radioTimer=setInterval(function(){
     if(AU.paused||!GM.playing)return;
-    // Check if current station is still playing
     if(AU.readyState>=2){
      // Keep alive
     }
@@ -1499,11 +1388,8 @@ $('pbfav').onclick=function(){
  if(GM.current){PS.addQuickAction({t:GM.current.n||GM.current.t||'stream',u:GM.current.u,icon:'★',tp:GM.current?GM.current.t:'radio'})}
  toast('Added to favorites','ok')
 };
-$('pbnext').onclick=function(){
- GM.next();
-};
+$('pbnext').onclick=function(){ GM.next(); };
 $('pbqueue').onclick=function(){
- // Show queue modal - display current queue from localStorage
  var q=JSON.parse(localStorage.getItem('gm-queue')||'[]');
  var h='<div style="max-height:400px;overflow:auto"><div class="spa-cards">';
  if(!q.length){h+='<div class="pempty">Queue is empty</div>'}
@@ -1520,7 +1406,7 @@ function plTypeOf(pl){
  if(pl==='recent')return S.hist[0]&&S.hist[0].tp;
  return PL[pl]?PL[pl].t:'tv'}
 
-/* ===== MODE SWITCHER (media pipeline untouched) ===== */
+/* ===== MODE SWITCHER ===== */
 var MODE='tv';
 function setMode(m){
  MODE=m;document.body.setAttribute('data-mode',m);
@@ -1547,7 +1433,7 @@ function setMode(m){
 }
 window.setMode=setMode;
 
-// ===== SPA ROUTING SYSTEM (hash-based navigation) =====
+// ===== SPA ROUTING SYSTEM =====
 var ROUTES={
  'home':function(){showHomeDashboard()},
  'favorites':function(){showFavoritesPage()},
@@ -1563,50 +1449,39 @@ var ROUTES={
 };
 function routeChange(hash){
  var route=(hash||window.location.hash.slice(1)||'home').toLowerCase();
- // Close modals
  document.querySelectorAll('.modal.open').forEach(function(m){m.className='modal'});
- // Clear active nav
  var cur=$('mainnav').querySelector('button.on');
  if(cur)cur.className='';
- // Route
  if(ROUTES[route])ROUTES[route]();
  else{setMode('tv');load('in')}
 }
 window.addEventListener('hashchange',function(){routeChange(window.location.hash.slice(1))});
-// Init: if no hash, default to home
 if(!window.location.hash){window.location.hash='#home';routeChange('home')}
 else{routeChange(window.location.hash.slice(1))}
-// Auto-load TV/Radio cards when navigated directly
 (function(){var h=window.location.hash.slice(1).toLowerCase();
  if(h==='tv'||h==='radio')setTimeout(function(){load(h==='tv'?'in':'rin')},800)});
 window.navigateTo=function(path){window.location.hash='#'+path}
 
 // ===== SPA PAGES =====
 function showHomeDashboard(){
- var h='';
- h+='<div class="spa-home"><div class="spa-hero"><div><h2>What can I watch, listen to or read right now?</h2><p>Continue where you left off, discover what\\'s live, and jump back into favorites.</p></div></div>';
- // Quick actions
+ var h='<div class="spa-home"><div class="spa-hero"><div><h2>What can I watch, listen to or read right now?</h2><p>Continue where you left off, discover what\\'s live, and jump back into favorites.</p></div></div>';
  var qa=$u('quickActions',[]);
  h+='<section class="spa-section"><h3>Quick Actions</h3><div class="spa-cards">';
  if(!qa.length){h+='<div class="pempty">No quick actions yet - tap a channel or station to pin it.</div>'}
  else{qa.forEach(function(a){h+='<div class="spa-card" onclick="navigateTo(\\''+(a.tp||'tv')+\\'')"><div class="spa-icon">'+(a.icon||'📌')+'</div><div class="spa-title">'+esc(a.t)+'</div></div>'})}
  h+='</div></section>';
- // Continue watching
  var c=$u('continueItems',[]);
  h+='<section class="spa-section"><h3>Continue Watching / Listening / Reading</h3><div class="spa-cards">';
  if(!c.length){h+='<div class="pempty">Nothing to continue yet - start something and it will appear here.</div>'}
  else{c.slice(0,6).forEach(function(a){h+='<div class="spa-card" onclick="navigateTo(\\''+(a.tp||'tv')+\\'')"><div class="spa-icon">'+(a.tp==='radio'?'🎧':a.tp==='books'?'📖':'📺')+'</div><div class="spa-title">'+esc(a.t)+'</div><div class="spa-sub">'+esc(a.tp||'media')+'</div></div>'})}
  h+='</div></section>';
- // Live now
  h+='<section class="spa-section"><h3>Live Now</h3><div class="spa-cards"><div class="spa-card live"><div class="spa-icon">🔴</div><div class="spa-title">Watch live TV</div><div class="spa-sub">Browse what\\'s on now</div></div><div class="spa-card live"><div class="spa-icon">🎧</div><div class="spa-title">Listen to live radio</div><div class="spa-sub">500+ stations worldwide</div></div></div></section>';
- // Favorites
  var f=$u('favorites',{});
  var favCount=0;for(var cat in f)favCount+=f[cat].length;
  h+='<section class="spa-section"><h3>Favorites ('+favCount+')</h3><div class="spa-cards">';
  if(!favCount){h+='<div class="pempty">Star your favorite TV, radio, podcasts, books and markets to see them here.</div>'}
  else{var shown=0;for(var cat in f){f[cat].slice(0,3).forEach(function(a){if(shown>=6)return;h+='<div class="spa-card" onclick="navigateTo(\\''+(cat||'tv')+\\'')"><div class="spa-icon">⭐</div><div class="spa-title">'+esc(a.t||a.n||'')+'</div><div class="spa-sub">'+esc(cat)+'</div></div>';shown++})}}
  h+='</div></section>';
- // Today\\'s useful content
  h+='<section class="spa-section"><h3>Today\\'s Useful Content</h3><div class="spa-cards"><div class="spa-card" onclick="navigateTo(\\'news\\')"><div class="spa-icon">📰</div><div class="spa-title">Latest news headlines</div><div class="spa-sub">60+ stories from top sources</div></div><div class="spa-card" onclick="navigateTo(\\'markets\\')"><div class="spa-icon">📈</div><div class="spa-title">Market snapshot</div><div class="spa-sub">NIFTY • SENSEX • US markets</div></div><div class="spa-card" onclick="navigateTo(\\'books\\')"><div class="spa-icon">📚</div><div class="spa-title">Free books</div><div class="spa-sub">70,000+ public domain titles</div></div></div></section>';
  $('grid').innerHTML=h;
  $('grid').style.display='grid';
@@ -1748,18 +1623,14 @@ function radioConnect(it){
  clearTimeout(PB.timer);PB.timer=setTimeout(go,7200);
  AU.onplaying=function(){PB.tries=0;PB.lastT=-1;PB.stall=0;pbSet('\\u266A LIVE - on air',true)};
  AU.onpause=function(){$('pbplay').innerHTML='\\u25B6'};
- // Live streams often fire a synthetic 'ended' event in browsers; ignore it
- // unless the user actually paused us. Only react to real errors.
  AU.onended=function(){if(!PB.on||AU.paused||!PB.cur)return;};
  AU.onerror=function(){if(!PB.on||!PB.cur)return;pbRetry('connection dropped')};
- AU.onstalled=function(){/* ignore - browser stalls on rebuffer are normal */};
- AU.onwaiting=function(){/* ignore - live streams wait when buffer drains */};
+ AU.onstalled=function(){/* ignore */};
+ AU.onwaiting=function(){/* ignore */};
  PB.lastT=-1;PB.stall=0;clearInterval(PB.wd);
  PB.wd=setInterval(function(){
   if(!PB.on||PB.cur!==it||AU.paused)return;
   var ct=AU.currentTime||0;
-  // For live streams, currentTime can stay pinned; require a long stall
-  // and only count it as a stall if the buffer has actually been drained.
   if(Math.abs(ct-PB.lastT)<0.05){
    var b=AU.buffered,end=b.length?b.end(b.length-1):0;
    var ahead=Math.max(0,end-(AU.currentTime||0));
@@ -1771,12 +1642,9 @@ function radioConnect(it){
 function pbRetry(reason){
  if(!PB.cur)return;
  PB.tries++;
- // Offer VLC handoff only after several retries, not on first failure
  if(PB.tries>=3&&!PB.vlcTried){PB.vlcTried=true;
   var u=PB.cur.u,nm=plain(esc(PB.cur.n)).slice(0,28);
   toast('Browser struggling - tap VLC button to switch','bad');
-  // Don't auto-stop: keep the player visible so the user can still retry
-  // or manually invoke VLC. The normal retry cycle continues.
  }
  if(PB.tries>6){radioStop('Station not responding ('+reason+')');return}
  pbSet('Reconnecting '+PB.tries+'/6...',true);
@@ -1793,7 +1661,6 @@ function radioPlay(it){
  PB.vlcTried=false;$('pbplay').innerHTML='\\u23F8';
  toast('\\u266B '+plain(esc(it.n)).slice(0,36));
  radioConnect(it);
- // Track with universal personalization
  PS.addHistory(it,'radio');
  PS.saveContinue(it,'radio',0);
  PS.addQuickAction({t:it.n||'stream',u:it.u,icon:'🎧',tp:'radio'});
@@ -1892,10 +1759,8 @@ function render(reset){
   var isHttp=/^https?:/i.test(it.u);
   var dcls=cached?(cached.ok===true?'online':
    (cached.ok===false?'dead':(isHttp?'unknown':'nonhttp'))):'';
-  var dtxt=dcls==='online'?'\\u2713':(dcls==='dead'?'\\u2715':
-   (dcls==='unknown?'~':'\\u00B7'));
+  var dtxt=dcls==='online'?'\\u2713':(dcls==='dead'?'\\u2715':'~');
   var isFav=S.favs.some(function(f){return f.u===it.u});
-  // Universal favorites check
   var uFav=PS.isFavorite(rad?'radio':'tv',it);
   var cont=PS.getContinue(rad?'radio':'tv').find(function(c){return c.u===it.u});
   var contMark=cont?'<span class="conti" title="Continue watching">▶</span>':'';
@@ -1940,7 +1805,7 @@ function pump(){while(S.busy<CONC&&S.queue.length){var u=S.queue.shift();
   if(d.dataset.u!==u)return;
   d.className='dot '+state;d.textContent=txt;
   if(title)d.title=title;
-  try{dotIO.unobserve(d)}catch(e){}})
+  try{dotIO.unobserve(d)}catch(e){}}
  function test(u,manual){
  if(!/^https?:/i.test(u)){var e0=findDot(u);
   if(e0)setDot(u,'nonhttp','?','Direct/VLC stream');
@@ -1958,7 +1823,6 @@ function pump(){while(S.busy<CONC&&S.queue.length){var u=S.queue.shift();
 
 /* ===== ACTIONS ===== */
 function pushHist(it,tp){if(!it||!it.u)return;
- // Universal personalization tracking
  var cat = (S.pl==='favs'||S.pl==='recent')?tp:(plTypeOf(S.pl)==='radio'?'radio':'tv');
  PS.addHistory(it,cat);
  PS.saveContinue(it,cat,0);
@@ -2162,9 +2026,7 @@ function nPaint(){
  for(var k=0;k<idxs.length;k++){var i2=idxs[k],a=NEWS.items[i2];
   var thumb=a.d?'<img src="'+esc(a.d)+'" loading="lazy" '+
    'onerror="this.remove()">':'';
-  // Add favorite icon
   var favIcon=PS.isFavorite('news',a)?'⭐':'☆';
-  // Add continue indicator
   var contIcon='';
   var cont=PS.getContinue('news').find(function(c){return c.t===a.t});
   if(cont)contIcon='<span class="conti" title="Continue reading">▶</span>';
@@ -2182,7 +2044,6 @@ $('nq').addEventListener('input',function(){clearTimeout(window._nqt);
 $('nlist').onclick=function(e){var a=e.target.closest('.ni');if(!a)return;
  nOpen(parseInt(a.dataset.i,10))};
 function nOpen(i){var a=NEWS.items[i];if(!a)return;
- // Track with universal personalization
  PS.addHistory(a,'news');
  PS.saveContinue(a,'news',0);
  $('rvtitle').textContent=a.t;
@@ -2202,7 +2063,6 @@ window.nOpen=nOpen;
 var POD={loaded:false};
 var POD_SRC = '';
 function podPopulateSrc(){var h='<option value="">All</option>';PODCAST_FEEDS.forEach(function(a){var sel=(a[0]===POD_SRC)?' selected="selected"':'';h+='<option value="'+a[0]+'"'+sel+'>'+esc(a[0])+'</option>'});
- // Add directory categories as filter options
  for(var cat in PODCAST_DIRECTORY_FEEDS){var name=cat.replace(/_/g,' ');name=name.charAt(0).toUpperCase()+name.slice(1);
   h+='<option value="dir:'+cat+'"'+((POD_SRC==='dir:'+cat)?' selected="selected"':'')+'>'+esc(name)+' feeds</option>';}
  $('podsrc').innerHTML=h;}
@@ -2229,10 +2089,8 @@ function podShow(){
  fetch('/api/podcasts').then(function(r){return r.json()})
   .then(function(j){
    POD.loaded=true;POD.items=j.items||[];
-   // Initialize chips and src select
    podPopulateChips();
    podPopulateSrc();
-   // Build discover links including directory feeds
    var links='';
    (j.directories||[]).forEach(function(a){
     links+='<a class="big" target="_blank" rel="noopener" href="'+esc(a.url)+
@@ -2242,7 +2100,6 @@ function podShow(){
     j.directory_feeds.forEach(function(a){
      links+='<a class="mini" target="_blank" rel="noopener" href="'+esc(a.url)+'">'+esc(a.name)+' ('+esc(a.category)+')</a> ';});}
    $('podfeeds').innerHTML='<span class="note">Discover more:</span>'+links;
-   // Reset filter state
    POD_SRC='';
    podPaint();
    })
@@ -2252,7 +2109,6 @@ function podShow(){
    var q=($('podq').value||'').toLowerCase(),
        items=POD.items||[],
        grouped={};
-   // Extract filter from POD_SRC (could be "source_name" or "dir:category")
    var filterType = 'source', filterVal = POD_SRC;
    if(POD_SRC && POD_SRC.indexOf('dir:') === 0){
      filterType = 'dir'; filterVal = POD_SRC.substring(4);
@@ -2260,11 +2116,9 @@ function podShow(){
    for(var i=0;i<items.length;i++){
      var a=items[i];
      if(q&&(a.t+' '+a.s+' '+(a.b||'')).toLowerCase().indexOf(q)<0)continue;
-     // Filter by source or directory category/language
      if(POD_SRC){
        if(filterType === 'source' && a.s !== filterVal)continue;
        if(filterType === 'dir'){
-         // Filter by directory category or language
          var itemCat = a.cat || '';
          var itemLang = a.lang || '';
          if(itemCat !== filterVal && itemLang !== filterVal)continue;
@@ -2453,11 +2307,9 @@ function loadChart(){
  var pb=$('chartpills').querySelectorAll('button');
  for(var i=0;i<pb.length;i++)pb[i].onclick=function(){
   CS.range=this.dataset.r;loadChart()};
- var ct=$('chartpills').querySelectorAll('[data-ct]');
- for(var i=0;i<ct.length;i++)ct[i].className='mini '+(ct[i].dataset.ct===CS.type?'active':'');
- ct[0].onclick=function(){CS.type='line';loadChart()};
- ct[1].onclick=function(){CS.type='candle';loadChart()};
- ct[2].onclick=function(){CS.type='bar';loadChart()};
+ document.querySelectorAll('[data-ct]').forEach(function(b){
+  b.className='mini '+(b.dataset.ct===CS.type?'active':'');
+  b.onclick=function(){CS.type=this.dataset.ct;loadChart()}});
  $('bigchart').innerHTML='<div class="pempty">Loading&#8230;</div>';
  $('chkstats').textContent='';
  fetch('/api/mchart?sym='+encodeURIComponent(CS.sym)+
@@ -2754,7 +2606,6 @@ new IntersectionObserver(function(es){es.forEach(function(e){
 })();
 window.load=load;load('in');setMode('tv');maybeWelcome();
 </script></body></html>"""
-
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *_): pass
 
@@ -2791,7 +2642,7 @@ class Handler(BaseHTTPRequestHandler):
                                  "application/json")
 
         if u.path == "/api/stream/start":
-            source = qs.get("input_url", qs.get("url", [""]))[0].strip()
+            source = qs.get("input_url", qs.get("url", [""])[0]).strip()
             try:
                 parsed = urlparse(source)
                 if parsed.scheme not in ("http", "https"):
@@ -2866,7 +2717,7 @@ class Handler(BaseHTTPRequestHandler):
 
         elif u.path == "/add":
             url = qs.get("url", [""])[0].strip()
-            name = re.sub(r'[<>&"\']', "",
+            name = re.sub(r'[<>&"\'"]', "",
                           qs.get("name", ["My IPTV"])[0]).strip()[:40] \
                           or "My IPTV"                       # QA fix #3
             if urlparse(url).scheme not in ("http", "https"):
@@ -3122,7 +2973,7 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 quote_data = yf_chart(ticker, "5d", "1d")
                 news = []
-                if yfinance is not None:
+                if yfinance:
                     try:
                         ticker_obj = yfinance.Ticker(ticker)
                         ticker_news = getattr(ticker_obj, "news", [])
@@ -3156,7 +3007,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.send(200, json.dumps({"market_news": fetch_market_news_feed()[:5]},
                                           ensure_ascii=True),
                           "application/json")
-            except Exception as exc:
+            except Exception as_exc:
                 self.send(502, json.dumps({"error": str(exc)[:80]}),
                           "application/json")
 
@@ -3179,8 +3030,7 @@ class Handler(BaseHTTPRequestHandler):
                                              headers={"User-Agent": "Mozilla/5.0"})
                 with urllib.request.urlopen(req, timeout=40) as r:
                     txt = r.read().decode("utf-8", errors="replace")
-                m1 = re.search(r"\*\*\*\s*START OF (THE )?PROJECT GUTENBERG.*?\*\*\\*",
-                               txt, re.I)
+                m1 = re.search(r"\*\*\*\s*START OF (THE )?PROJECT GUTENBERG.*?\*\*\\*", txt, re.I)
                 m2 = re.search(r"\*\*\*\s*END OF (THE )?PROJECT GUTENBERG", txt, re.I)
                 if m1: txt = txt[m1.end():]
                 if m2: txt = txt[:m2.start()]
@@ -3372,7 +3222,7 @@ def register_market_routes(app):
         try:
             quote_data = yf_chart(symbol, "5d", "1d")
             news = []
-            if yfinance is not None:
+            if yfinance:
                 for item in (getattr(yfinance.Ticker(symbol), "news", []) or [])[:5]:
                     content = item.get("content") or item
                     provider = content.get("provider") or {}
@@ -3402,7 +3252,7 @@ def register_market_routes(app):
         except Exception as exc:
             raise HTTPException(status_code=502, detail=str(exc))
 
-if FastAPI is not None:
+if FastAPI:
     fastapi_app = FastAPI(title="Sg_ent_media_radio API", version=VERSION)
     register_livestream_routes(fastapi_app)
     register_book_routes(fastapi_app)
@@ -3439,46 +3289,46 @@ def start_server():
             SRV = ThreadingHTTPServer(("0.0.0.0", p), Handler)
             PORT = p; return True
         except OSError:
-            log("[!] Port %d busy, trying next..." % p)
+            log(f"[!] Port {p} busy, trying next...")
     raise RuntimeError("No free port")
 
 def run():
     global LAN_IP, TS_IP
     LAN_IP = "" if IS_CLOUD else get_lan_ip()
     TS_IP = "" if IS_CLOUD else get_tailscale_ip()
-    log("[i] Sg_ent_media_radio v%s" % VERSION)
-    log("[i] Mode: %s" % ("Render cloud" if IS_CLOUD else "Local PC"))
-    log("[i] VLC: %s" % (VLC or "NOT FOUND"))
+    log(f"[i] Sg_ent_media_radio v{VERSION}")
+    log(f"[i] Mode: {'Render cloud' if IS_CLOUD else 'Local PC'}")
+    log(f"[i] VLC: {VLC or 'NOT FOUND'}")
     start_server()
     log("")
     if IS_CLOUD:
-        log("    Public HTTP : 0.0.0.0:%d" % PORT)
-        log("    Render URL  : assigned by Render")
+        log(f"    Public HTTP : 0.0.0.0:{PORT}")
+        log(f"    Render URL  : assigned by Render")
     else:
-        log("    PC          :  http://127.0.0.1:%d" % PORT)
-        if LAN_IP: log("    Phone(WiFi) :  http://%s:%d" % (LAN_IP, PORT))
-        if TS_IP:  log("    Anywhere(TS):  http://%s:%d" % (TS_IP, PORT))
+        log(f"    PC          :  http://127.0.0.1:{PORT}")
+        if LAN_IP: log(f"    Phone(WiFi) :  http://{LAN_IP}:{PORT}")
+        if TS_IP:  log(f"    Anywhere(TS):  http://{TS_IP}:{PORT}")
         threading.Timer(0.8, lambda: webbrowser.open(
-            "http://127.0.0.1:%d/" % PORT)).start()
+            f"http://127.0.0.1:{PORT}/")).start()
     log("")
     try: SRV.serve_forever()
     except KeyboardInterrupt: pass
-    log("\nBye!")
+    log("\\nBye!")
 
 def _res(name, ok, info=""):
-    log("  [%s] %-26s %s" % ("PASS" if ok else "WARN", name, info))
+    log(f"  [{'PASS' if ok else 'WARN'}] {name:<26} {info}")
     return 1 if ok else 0
 
 def selftest():
-    log("\nSg_ent_media_radio v%s - SELF TEST\n%s" % (VERSION, "-" * 46))
+    log(f"\\nSg_ent_media_radio v{VERSION} - SELF TEST\\n{'-' * 46}")
     sc = 0
     try:
         SHELL.encode("utf-8")
         sc += _res("page template", True, "ascii-clean")
     except Exception as e:
         sc += _res("page template", False, str(e))
-    ch = parse_m3u('#EXTM3U\n#EXTINF:-1 tvg-id="X.in" group-title="News",T\n'
-                   'http://s/x.m3u8\n')
+    ch = parse_m3u('#EXTM3U\\n#EXTINF:-1 tvg-id=\"X.in\" group-title=\"News\",T\\n'
+                   'http://s/x.m3u8\\n')
     sc += _res("m3u parser",
                len(ch) == 1 and ch[0]["id"] == "X.in", "ok")
     sc += _res("epoch parser",
@@ -3493,37 +3343,35 @@ def selftest():
     test_port = PORT if IS_CLOUD else 8765
     s = socket.socket(); free = s.connect_ex(("127.0.0.1", test_port)) != 0
     s.close()
-    sc += _res("port %d" % test_port, free, "free" if free else "busy - fallback ready")
+    sc += _res(f"port {test_port}", free, "free" if free else "busy - fallback ready")
     sc += _res("VLC", bool(VLC), VLC or "install VLC!")
     try:
         n = len(load_playlist("in"))
-        sc += _res("TV playlist", n > 50, "%d channels" % n)
+        sc += _res("TV playlist", n > 50, f"{n} channels")
     except Exception as e:
         _res("TV playlist", False, str(e)[:40])
     ok_r = _radio_ok()
     sc += _res("Radio API", ok_r,
-               ("%d stations"
-                % len(CACHE.get("rin", {}).get("chans", [])))
+               f"{len(CACHE.get('rin', {}).get('chans', []))} stations"
                if ok_r else "unreachable")
     try:
         nn = len(fetch_news("top"))
-        sc += _res("News RSS", nn >= 5, "%d headlines" % nn)
+        sc += _res("News RSS", nn >= 5, f"{nn} headlines")
     except Exception as e:
         _res("News RSS", False, str(e)[:40])
     try:
         p = yf_chart("^NSEI").get("price")
-        sc += _res("Markets API", bool(p), "NIFTY %s" % p)
+        sc += _res("Markets API", bool(p), f"NIFTY {p}")
     except Exception as e:
         _res("Markets API", False, str(e)[:40])
     try:
         gc = gutendex({"languages": "hi"}).get("count", 0)
-        sc += _res("Books API", gc > 100, "%d hindi books" % gc)
+        sc += _res("Books API", gc > 100, f"{gc} hindi books")
     except Exception as e:
         _res("Books API", False, str(e)[:40])
     sc += _res("Internet", net_ok(), "OK" if net_ok() else "offline")
     log("-" * 46)
-    log("RESULT: %s (%d/13 passed)" %
-        ("READY TO RUN" if sc >= 9 else "REVIEW WARNINGS ABOVE", sc))
+    log(f"RESULT: {'READY TO RUN' if sc >= 9 else 'REVIEW WARNINGS ABOVE'} ({sc}/13 passed)")
     return 0 if sc >= 9 else 1
 
 def main():
@@ -3538,8 +3386,7 @@ def main():
             with open(os.path.join(
                     os.path.dirname(os.path.abspath(sys.argv[0])),
                     "iptv_dashboard.log"), "a", encoding="utf-8") as f:
-                f.write("\n[%s]\n%s\n" %
-                        (time.strftime("%Y-%m-%d %H:%M"), err))
+                f.write(f"\n[{time.strftime('%Y-%m-%d %H:%M')}]\\n{err}\\n")
         except Exception:
             pass
         raise SystemExit(1)
