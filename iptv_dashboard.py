@@ -3007,7 +3007,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.send(200, json.dumps({"market_news": fetch_market_news_feed()[:5]},
                                           ensure_ascii=True),
                           "application/json")
-            except Exception as_exc:
+            except Exception as exc:
                 self.send(502, json.dumps({"error": str(exc)[:80]}),
                           "application/json")
 
