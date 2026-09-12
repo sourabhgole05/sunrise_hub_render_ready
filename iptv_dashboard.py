@@ -16,7 +16,7 @@ import xml.etree.ElementTree as ET
 from email.utils import parsedate_to_datetime
 from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor
-from urllib.parse import urlparse, parse_qs, quote, urlencode
+from urllib.parse import urlparse, parse_qs, quote, urlencode, urljoin
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 try:
@@ -861,11 +861,48 @@ def check_stream(url):
     except Exception:
         return {"ok": False, "code": 0, "ms": ms()}
 
+def hls_proxy_resource(url):
+    """Fetch an HLS resource and rewrite playlist URLs to this server."""
+    parsed = urlparse((url or "").strip())
+    if parsed.scheme not in ("http", "https"):
+        raise ValueError("HLS proxy accepts only http(s) URLs")
+    req = urllib.request.Request(
+        url, headers={"User-Agent": "Mozilla/5.0", "Accept": "*/*"})
+    with urllib.request.urlopen(req, timeout=15) as response:
+        body = response.read()
+        content_type = response.headers.get("Content-Type", "")
+    is_playlist = (
+        parsed.path.lower().endswith((".m3u8", ".m3u"))
+        or b"#EXTM3U" in body[:128]
+        or "mpegurl" in content_type.lower()
+    )
+    if not is_playlist:
+        return body, content_type or "application/octet-stream"
+    text = body.decode("utf-8", errors="replace")
+    proxy_prefix = "/hls-proxy?url="
+    rewritten = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            def replace_uri(match):
+                target = urljoin(url, match.group(2))
+                return '%s="%s%s"' % (
+                    match.group(1), proxy_prefix, quote(target, safe=""))
+            line = re.sub(r'(URI=)["\']([^"\']+)["\']',
+                          replace_uri, line)
+        else:
+            target = urljoin(url, stripped)
+            line = proxy_prefix + quote(target, safe="")
+        rewritten.append(line)
+    return ("\n".join(rewritten) + "\n").encode("utf-8"), \
+        "application/vnd.apple.mpegurl"
+
 def esc(s): return H.escape(str(s or ""), quote=True)
 def MOBILE_UA(ua): return bool(re.search(r"Android|iPhone|iPad|iPod|Mobile",
                                          ua or ""))
 
 SHELL = """<!doctype html><html><head><meta charset="utf-8">
+<script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.17/dist/hls.min.js"></script>
 <meta name="viewport" content="width=device-width,initial-scale=1,
  maximum-scale=1,user-scalable=no">
 <title>Sg_ent_media_radio</title>
@@ -1270,7 +1307,7 @@ body[data-mode=podcasts] #panel-podcasts{display:block}
    autocomplete="off" oninput="showGlobalSearch()">
   <button class="big" id="playall">&#9654; Whole list in VLC</button>
   <label class="tog"><input type="checkbox" id="auto" checked> auto-check</label>
-  <label class="tog"><input type="checkbox" id="okfirst"> online first</label>
+  <label class="tog"><input type="checkbox" id="okfirst" checked> online first</label>
  </div>
  <div id="chips"></div>
 </header>
@@ -1574,6 +1611,7 @@ var GM={
  volume:parseFloat(localStorage.getItem('iptv-vol')||'0.85'),
  mute:false,
  init:function(){
+  if(typeof AU==='undefined')return;
   this.volume=this.volume||parseFloat(localStorage.getItem('iptv-vol')||'0.85');
   AU.volume=this.volume;
   this.radioTimer=null;
@@ -1583,7 +1621,7 @@ var GM={
   this.current=item;
   if(/\\.m3u8/i.test(item.u)){
    this._playHLS(item);return}
-  AU.src=item.u;
+  AU.src=radioSourceUrl(item.u);
   AU.play().catch(function(){toast('Tap PLAY to start',false)});
   this.playing=true;
   this._trackRadio();
@@ -1643,7 +1681,6 @@ var GM={
   try{localStorage.setItem('gm-queue',JSON.stringify(this.queue))}catch(e){}
  }
 };
-GM.init();
 window.GM=GM;
 
 // Queue UI buttons
@@ -1680,7 +1717,7 @@ function setMode(m){
  for(var i=0;i<nb.length;i++){
   var btn=nb[i];
   btn.className=(btn.dataset.mode===m)?'on':'';
-  btn.onclick=function(){navigateTo(this.dataset.mode)};
+  btn.onclick=function(){navigateTo(this.dataset.mode);};
  }
  var med=(m==='media'||m==='tv'||m==='radio');
  $('chips').style.display=med?'flex':'none';
@@ -1736,30 +1773,30 @@ window.navigateTo=function(path){window.location.hash='#'+path}
 // ===== SPA PAGES =====
 function showHomeDashboard(){
  var h='';
- h+='<div class="spa-home"><div class="spa-hero"><div><h2>What can I watch, listen to or read right now?</h2><p>Continue where you left off, discover what\\'s live, and jump back into favorites.</p></div></div>';
+ h+='<div class="spa-home"><div class="spa-hero"><div><h2>What can I watch, listen to or read right now?</h2><p>Continue where you left off, discover what&#39;s live, and jump back into favorites.</p></div></div>';
  // Quick actions
  var qa=$u('quickActions',[]);
  h+='<section class="spa-section"><h3>Quick Actions</h3><div class="spa-cards">';
  if(!qa.length){h+='<div class="pempty">No quick actions yet - tap a channel or station to pin it.</div>'}
- else{qa.forEach(function(a){h+='<div class="spa-card" onclick="navigateTo(\''+(a.tp||'tv')+'\')"><div class="spa-icon">'+(a.icon||'📌')+'</div><div class="spa-title">'+esc(a.t)+'</div></div>'})}
+ else{qa.forEach(function(a){h+='<div class="spa-card" onclick="navigateTo(&quot;'+esc(a.tp||'tv')+'&quot;)"><div class="spa-icon">'+(a.icon||'📌')+'</div><div class="spa-title">'+esc(a.t)+'</div></div>'})}
  h+='</div></section>';
  // Continue watching
  var c=$u('continueItems',[]);
  h+='<section class="spa-section"><h3>Continue Watching / Listening / Reading</h3><div class="spa-cards">';
  if(!c.length){h+='<div class="pempty">Nothing to continue yet - start something and it will appear here.</div>'}
- else{c.slice(0,6).forEach(function(a){h+='<div class="spa-card" onclick="navigateTo(\''+(a.tp||'tv')+'\')"><div class="spa-icon">'+(a.tp==='radio'?'🎧':a.tp==='books'?'📖':'📺')+'</div><div class="spa-title">'+esc(a.t)+'</div><div class="spa-sub">'+esc(a.tp||'media')+'</div></div>'})}
+ else{c.slice(0,6).forEach(function(a){h+='<div class="spa-card" onclick="navigateTo(&quot;'+esc(a.tp||'tv')+'&quot;)"><div class="spa-icon">'+(a.tp==='radio'?'🎧':a.tp==='books'?'📖':'📺')+'</div><div class="spa-title">'+esc(a.t)+'</div><div class="spa-sub">'+esc(a.tp||'media')+'</div></div>'})}
  h+='</div></section>';
  // Live now
- h+='<section class="spa-section"><h3>Live Now</h3><div class="spa-cards"><div class="spa-card live"><div class="spa-icon">🔴</div><div class="spa-title">Watch live TV</div><div class="spa-sub">Browse what\'s on now</div></div><div class="spa-card live"><div class="spa-icon">🎧</div><div class="spa-title">Listen to live radio</div><div class="spa-sub">500+ stations worldwide</div></div></div></section>';
+ h+='<section class="spa-section"><h3>Live Now</h3><div class="spa-cards"><div class="spa-card live"><div class="spa-icon">🔴</div><div class="spa-title">Watch live TV</div><div class="spa-sub">Browse what&#39;s on now</div></div><div class="spa-card live"><div class="spa-icon">🎧</div><div class="spa-title">Listen to live radio</div><div class="spa-sub">500+ stations worldwide</div></div></div></section>';
  // Favorites
  var f=$u('favorites',{});
  var favCount=0;for(var cat in f)favCount+=f[cat].length;
  h+='<section class="spa-section"><h3>Favorites ('+favCount+')</h3><div class="spa-cards">';
  if(!favCount){h+='<div class="pempty">Star your favorite TV, radio, podcasts, books and markets to see them here.</div>'}
- else{var shown=0;for(var cat in f){f[cat].slice(0,3).forEach(function(a){if(shown>=6)return;h+='<div class="spa-card" onclick="navigateTo(\''+(cat||'tv')+'\')"><div class="spa-icon">⭐</div><div class="spa-title">'+esc(a.t||a.n||'')+'</div><div class="spa-sub">'+esc(cat)+'</div></div>';shown++})}}
+ else{var shown=0;for(var cat in f){f[cat].slice(0,3).forEach(function(a){if(shown>=6)return;h+='<div class="spa-card" onclick="navigateTo(&quot;'+esc(cat||'tv')+'&quot;)"><div class="spa-icon">⭐</div><div class="spa-title">'+esc(a.t||a.n||'')+'</div><div class="spa-sub">'+esc(cat)+'</div></div>';shown++})}}
  h+='</div></section>';
  // Today's useful content
- h+='<section class="spa-section"><h3>Today\'s Useful Content</h3><div class="spa-cards"><div class="spa-card" onclick="navigateTo(\'news\')"><div class="spa-icon">📰</div><div class="spa-title">Latest news headlines</div><div class="spa-sub">60+ stories from top sources</div></div><div class="spa-card" onclick="navigateTo(\'markets\')"><div class="spa-icon">📈</div><div class="spa-title">Market snapshot</div><div class="spa-sub">NIFTY • SENSEX • US markets</div></div><div class="spa-card" onclick="navigateTo(\'books\')"><div class="spa-icon">📚</div><div class="spa-title">Free books</div><div class="spa-sub">70,000+ public domain titles</div></div></div></section>';
+ h+='<section class="spa-section"><h3>Today&#39;s Useful Content</h3><div class="spa-cards"><div class="spa-card" onclick="navigateTo(&quot;news&quot;)"><div class="spa-icon">📰</div><div class="spa-title">Latest news headlines</div><div class="spa-sub">60+ stories from top sources</div></div><div class="spa-card" onclick="navigateTo(&quot;markets&quot;)"><div class="spa-icon">📈</div><div class="spa-title">Market snapshot</div><div class="spa-sub">NIFTY • SENSEX • US markets</div></div><div class="spa-card" onclick="navigateTo(&quot;books&quot;)"><div class="spa-icon">📚</div><div class="spa-title">Free books</div><div class="spa-sub">70,000+ public domain titles</div></div></div></section>';
  $('grid').innerHTML=h;
  $('grid').style.display='grid';
  document.querySelector('.row2').style.display='none';
@@ -1788,7 +1825,7 @@ function showHistoryPage(){
  var h=$u('history',[]);
  var out='<div class="spa-home"><h2>🕘 Recently Used</h2><div class="spa-sections">';
  if(!h.length){out+='<div class="pempty">Your recent activity will appear here.</div>'}
- else{out+='<div class="spa-cards">';h.slice(0,20).forEach(function(a){out+='<div class="spa-card" onclick="navigateTo(\''+(a.tp||'tv')+'\')"><div class="spa-icon">🕘</div><div class="spa-title">'+esc(a.t)+'</div><div class="spa-sub">'+esc(a.tp||'media')+'</div></div>'});out+='</div>'}
+ else{out+='<div class="spa-cards">';h.slice(0,20).forEach(function(a){out+='<div class="spa-card" onclick="navigateTo(&quot;'+esc(a.tp||'tv')+'&quot;)"><div class="spa-icon">🕘</div><div class="spa-title">'+esc(a.t)+'</div><div class="spa-sub">'+esc(a.tp||'media')+'</div></div>'});out+='</div>'}
  out+='</div></div>';
  $('grid').innerHTML=out;
  $('grid').style.display='grid';
@@ -1800,7 +1837,7 @@ function showContinuePage(){
  var c=$u('continueItems',[]);
  var out='<div class="spa-home"><h2>▶ Continue Watching / Listening / Reading</h2><div class="spa-sections">';
  if(!c.length){out+='<div class="pempty">Nothing to continue yet.</div>'}
- else{out+='<div class="spa-cards">';c.slice(0,20).forEach(function(a){out+='<div class="spa-card" onclick="navigateTo(\''+(a.tp||'tv')+'\')"><div class="spa-icon">▶</div><div class="spa-title">'+esc(a.t)+'</div><div class="spa-sub">'+esc(a.tp||'media')+'</div></div>'});out+='</div>'}
+ else{out+='<div class="spa-cards">';c.slice(0,20).forEach(function(a){out+='<div class="spa-card" onclick="navigateTo(&quot;'+esc(a.tp||'tv')+'&quot;)"><div class="spa-icon">▶</div><div class="spa-title">'+esc(a.t)+'</div><div class="spa-sub">'+esc(a.tp||'media')+'</div></div>'});out+='</div>'}
  out+='</div></div>';
  $('grid').innerHTML=out;
  $('grid').style.display='grid';
@@ -1855,6 +1892,7 @@ function showGlobalSearch(){
 /* ===== RADIO ENGINE v3 ===== */
 var AU=new Audio();AU.preload='auto';AU.playbackRate=1;
 AU.volume=parseFloat(localStorage.getItem('iptv-vol')||'0.85');
+GM.init();
 var PB={on:false,cur:null,tries:0,timer:null,wd:null,bt:null,
         lastT:-1,stall:0,fired:false,vlcTried:false};
 function pbSet(txt,live){
@@ -1880,7 +1918,7 @@ function radioConnect(it){
  pbSet('Connecting...',true);
  clearTimeout(PB.timer);clearInterval(PB.wd);clearInterval(PB.bt);
  try{AU.pause();AU.removeAttribute('src');AU.load()}catch(e){}
- AU.src=it.u;
+ AU.src=radioSourceUrl(it.u);
  var t0=Date.now();
  PB.bt=setInterval(function(){
   if(!PB.on||PB.cur!==it||AU.readyState>=3)return;
@@ -1936,9 +1974,7 @@ function pbRetry(reason){
  setTimeout(function(){if(PB.cur===it)radioConnect(it)},delay)}
 function radioPlay(it){
  if(/\\.m3u8/i.test(it.u)){
-  toast('HLS station - opening in VLC','bad');
-  fetch('/play?url='+encodeURIComponent(it.u)).then(function(r){return r.json()})
-  .then(function(j){toast(j.msg,j.ok?'ok':'bad')});
+  openPlayer(it,it.u);
   PS.addHistory(it,'radio');
   PS.saveContinue(it,'radio',0);
   pushHist(it,'radio');return}
@@ -2105,7 +2141,11 @@ function test(u,manual){
    lsSet('iptv-chk',S.chk);
    setDot(u,j.ok===true?'online':(j.ok===false?'dead':'unknown'),
     j.ok===true?'\\u2713':(j.ok===false?'\\u2715':'~'),
-    'HTTP '+j.code+(j.ms?', '+j.ms+' ms':''))})
+     'HTTP '+j.code+(j.ms?', '+j.ms+' ms':''));
+    if(!manual&&$('okfirst').checked){
+     clearTimeout(window._sortTimer);
+     window._sortTimer=setTimeout(function(){render(true)},150);
+    }})
   .catch(function(){})}
 
 /* ===== ACTIONS ===== */
@@ -2123,9 +2163,11 @@ function findAny(u){var pools=[cur(),S.favs,S.hist,S.chans];
   for(var i=0;i<pools[p].length;i++)
    if(pools[p][i].u===u)return pools[p][i];
  return null}
-var PLAYER={url:'',item:null};
+var PLAYER={url:'',item:null,hls:null};
 function closePlayer(){
- var v=$('tvplayer');v.pause();v.removeAttribute('src');v.load();
+ var v=$('tvplayer');
+ if(PLAYER.hls){PLAYER.hls.destroy();PLAYER.hls=null}
+ v.pause();v.removeAttribute('src');v.load();
  showModal('playermodal',false);PLAYER.url='';PLAYER.item=null}
 window.closePlayer=closePlayer;
 function vlcLink(u){
@@ -2141,11 +2183,44 @@ function urlparseForPlayer(u){
  var p=u.indexOf('://'),m=p>0?[u.slice(0,p),u.slice(p+3)]:null;
  return {scheme:m?m[0]:'http',hostpath:m?m[1]:u};
 }
+function playbackUrl(u){
+ return /\\.m3u8(?:$|[?#])/i.test(u)
+  ?'/hls-proxy?url='+encodeURIComponent(u):u;
+}
+function radioSourceUrl(u){
+ return IS_CLOUD&&/^http:/i.test(u)
+  ?'/media-proxy?url='+encodeURIComponent(u):u;
+}
 function playerPlay(){
  var v=$('tvplayer');
  if(!PLAYER.url)return;
- if(v.src!==PLAYER.url)v.src=PLAYER.url;
- v.preload='auto';v.play().catch(function(){
+ if(PLAYER.hls){PLAYER.hls.destroy();PLAYER.hls=null}
+ v.pause();v.removeAttribute('src');v.load();v.preload='auto';
+ var isHls=/\\.m3u8(?:$|[?#])/i.test(PLAYER.url);
+ var nativeHls=v.canPlayType('application/vnd.apple.mpegurl');
+ if(isHls&&!nativeHls){
+  if(!window.Hls||!Hls.isSupported()){
+   $('playerhint').textContent='This browser cannot play HLS. Use VLC or Open stream.';
+   return;
+  }
+  PLAYER.hls=new Hls({enableWorker:true,lowLatencyMode:true});
+  PLAYER.hls.loadSource(playbackUrl(PLAYER.url));
+  PLAYER.hls.attachMedia(v);
+  PLAYER.hls.on(Hls.Events.MANIFEST_PARSED,function(){
+   v.play().catch(function(){
+    $('playerhint').textContent='Tap the play button if autoplay is blocked by your browser.';
+   });
+  });
+  PLAYER.hls.on(Hls.Events.ERROR,function(_event,data){
+   if(data.fatal){
+    $('playerhint').textContent='TV stream could not be played here. Try VLC or Open stream.';
+    PLAYER.hls.destroy();PLAYER.hls=null;
+   }
+  });
+ }else{
+  v.src=playbackUrl(PLAYER.url);
+ }
+ if(!isHls||nativeHls)v.play().catch(function(){
   $('playerhint').textContent='Tap the play button if autoplay is blocked by your browser.'
  });
  $('playerhint').textContent='Playing in the phone browser. Source quality is automatic.';
@@ -2166,7 +2241,8 @@ function openVlcMobile(){
 }
 function openPlayer(it,u){
  PLAYER.url=u;PLAYER.item=it;
- $('playertitle').textContent='Watch '+plain(it.n||'stream').slice(0,60);
+ $('playertitle').textContent=(it.tp==='radio'?'Listen ':'Watch ')+
+  plain(it.n||'stream').slice(0,60);
  $('playerhint').textContent=/Android|iPhone|iPad|iPod/i.test(navigator.userAgent)
   ?'VLC can be opened when installed; otherwise play in this browser.'
   :'Choose a playback option.';
@@ -2321,7 +2397,7 @@ function nPaint(){
   var cont=PS.getContinue('news').find(function(c){return c.t===a.t});
   if(cont)contIcon='<span class="conti" title="Continue reading">▶</span>';
   h+='<article class="ni'+(k===0&&!q?' hero':'')+'" data-i="'+i2+'">'+
-   '<div class="nifav" onclick="PS.toggleFavorite(\'news\',a);nPaint();event.stopPropagation()">'+favIcon+'</div>'+
+   '<div class="nifav" onclick="PS.toggleFavorite(&quot;news&quot;,a);nPaint();event.stopPropagation()">'+favIcon+'</div>'+
    thumb+'<div class="nitxt"><h3>'+esc(a.t)+'</h3>'+
    (k===0&&!q&&a.b?'<p>'+esc(a.b)+'</p>':'')+
    '<span class="nimeta">'+esc(a.s)+(a.pub?' &middot; '+agoT(a.pub):'')+
@@ -2439,7 +2515,7 @@ function podShow(){
           '" loading="lazy" onerror="this.remove()">':'')+
           '<div class="podtext"><b>'+esc(a.t)+'</b><div class="nimeta">'+
           esc(a.s)+(a.pub?' &middot; '+agoT(a.pub):'')+
-          ' <span class="podfav" onclick="PS.toggleFavorite(\'podcasts\',a);podPaint();event.stopPropagation()">'+fav+'</span>'+
+          ' <span class="podfav" onclick="PS.toggleFavorite(&quot;podcasts&quot;,a);podPaint();event.stopPropagation()">'+fav+'</span>'+
           cont+'</div>'+
           (a.b?'<p>'+esc(a.b)+'</p>':'')+'</div>'+
           (a.audio?'<audio controls preload="none" src="'+esc(a.audio)+'"></audio>':'')+
@@ -2508,7 +2584,7 @@ function barV(vals,w,h){
 function mkRow(q,label,canRm){
  var live=q.state==='REGULAR'||q.state==='OPEN';
  var fav=PS.isFavorite('markets',q)?'⭐':'☆';
- return'<div class="mkrow" data-sym="'+esc(q.sym)+'" onclick="PS.addHistory({t:\''+(label||q.name||q.sym)+'\',u:\'/api/quote?sym='+esc(q.sym)+'\',tp:\'markets\'},\'markets\');PS.saveContinue({t:\''+(label||q.name||q.sym)+'\',u:\'/api/quote?sym='+esc(q.sym)+'\',tp:\'markets\'},\'markets\',0)">'+
+ return'<div class="mkrow" data-sym="'+esc(q.sym)+'" onclick="openChart(&quot;'+esc(q.sym)+'&quot;)">'+
   '<div class="mkid"><b>'+esc(label||q.name||q.sym)+'</b>'+
   '<span class="mkst '+(live?'live':'off')+'">'+(live?'LIVE':'CLOSED')+
   '</span>'+fav+(canRm?'<button class="rm" data-sym="'+esc(q.sym)+
@@ -2828,7 +2904,7 @@ function load(pl){S.pl=pl;S.cat='all';S.q='';$('q').value='';
  .catch(function(){$('loader').style.display='none';
   $('grid').innerHTML='<div class="errbox"><h3>Could not load</h3>'+
    '<br>Check your internet connection.<br><br>'+
-   '<button class="big" onclick="load(\\''+pl+'\\')">Retry</button></div>'})}
+   '<button class="big" onclick="load(&quot;'+esc(pl)+'&quot;)">Retry</button></div>'})}
 
 /* ===== EVENTS ===== */
 $('mainnav').onclick=function(e){
@@ -2926,6 +3002,54 @@ class Handler(BaseHTTPRequestHandler):
 
         if u.path == "/healthz":
             return self.send(200, "ok", "text/plain; charset=utf-8")
+
+        if u.path == "/media-proxy":
+            source = qs.get("url", [""])[0].strip()
+            parsed = urlparse(source)
+            if parsed.scheme not in ("http", "https"):
+                return self.send(400, '{"ok":false,"error":"URL must be http(s)"}',
+                                 "application/json")
+            try:
+                req = urllib.request.Request(
+                    source, headers={"User-Agent": "Mozilla/5.0",
+                                     "Icy-MetaData": "1"})
+                upstream = urllib.request.urlopen(req, timeout=15)
+                self.send_response(200)
+                self.send_header("Content-Type",
+                                 upstream.headers.get(
+                                     "Content-Type", "audio/mpeg"))
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+                while True:
+                    chunk = upstream.read(64 * 1024)
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+                upstream.close()
+                return
+            except (urllib.error.HTTPError, urllib.error.URLError,
+                    TimeoutError, BrokenPipeError, ConnectionResetError) as exc:
+                try:
+                    upstream.close()
+                except UnboundLocalError:
+                    pass
+                return self.send(502, json.dumps({
+                    "ok": False, "error": str(exc)[:180]
+                }), "application/json")
+
+        if u.path == "/hls-proxy":
+            source = qs.get("url", [""])[0].strip()
+            try:
+                body, content_type = hls_proxy_resource(source)
+                return self.send(200, body, content_type,
+                                 [("Access-Control-Allow-Origin", "*"),
+                                  ("Cache-Control", "no-store")])
+            except (ValueError, urllib.error.HTTPError,
+                    urllib.error.URLError, TimeoutError) as exc:
+                return self.send(502, json.dumps({
+                    "ok": False, "error": str(exc)[:180]
+                }), "application/json")
 
         if u.path == "/api/hls/start":
             source = qs.get("url", [""])[0].strip()
