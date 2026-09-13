@@ -7,7 +7,7 @@
 #  Gutendex (Project Gutenberg)
 #  Self-test:  python iptv_dashboard.py --selftest
 # ============================================================
-import asyncio, html as H, json, os, re, shutil, socket, subprocess, sys, threading, time
+import html as H, json, os, re, shutil, socket, subprocess, sys, threading, time
 import traceback, base64, io, calendar, gzip
 import mimetypes, tempfile, uuid
 from pathlib import Path
@@ -36,16 +36,6 @@ try:
 except ImportError:
     feedparser = None
 try:
-    from movie_box.v1 import Search as MovieBoxSearch
-    from movie_box.v1 import Session as MovieBoxSession
-    from movie_box.v1 import SubjectType as MovieBoxSubjectType
-    from movie_box.v1 import Trending as MovieBoxTrending
-except ImportError:
-    MovieBoxSearch = None
-    MovieBoxSession = None
-    MovieBoxSubjectType = None
-    MovieBoxTrending = None
-try:
     from fastapi import FastAPI, BackgroundTasks, HTTPException, Query
     from fastapi.responses import FileResponse
 except ImportError:
@@ -55,7 +45,7 @@ except ImportError:
     Query = None
     FileResponse = None
 
-VERSION   = "12.0"
+VERSION   = "11.0"
 CACHE_TTL = 1800
 IS_CLOUD  = os.environ.get("RENDER", "").lower() == "true"
 SRV, PORT = None, int(os.environ.get("PORT", "8765")) if IS_CLOUD else 8765
@@ -827,100 +817,6 @@ def book_text(bid):
         BOOK_TXT.pop(BOOK_TXT_ORDER.pop(0), None)
     return txt
 
-
-# ---------------- MOVIEBOX (optional, isolated provider) ----------------
-# MovieBox is an external educational package. Sunrise Hub only uses its
-# discovery/metadata APIs here. It does NOT proxy, download, or re-host media.
-MOVIEBOX_ENABLED = MovieBoxSearch is not None and MovieBoxSession is not None
-
-def _moviebox_subject_type(kind):
-    if not MovieBoxSubjectType:
-        return None
-    k = (kind or "all").strip().lower()
-    return {
-        "movie": MovieBoxSubjectType.MOVIES,
-        "movies": MovieBoxSubjectType.MOVIES,
-        "series": MovieBoxSubjectType.TV_SERIES,
-        "tv": MovieBoxSubjectType.TV_SERIES,
-        "tv_series": MovieBoxSubjectType.TV_SERIES,
-        "all": MovieBoxSubjectType.ALL,
-    }.get(k, MovieBoxSubjectType.ALL)
-
-def _moviebox_normalize_item(item):
-    if not isinstance(item, dict):
-        return {"title": str(item)}
-    def pick(*keys):
-        for k in keys:
-            v = item.get(k)
-            if v not in (None, ""):
-                return v
-        return None
-    return {
-        "title": pick("title", "name") or "Untitled",
-        "id": pick("subjectId", "id"),
-        "subject_type": pick("subjectType", "type"),
-        "page_url": pick("pageUrl", "page_url", "url"),
-        "poster": pick("cover", "coverUrl", "poster", "posterUrl", "image"),
-        "release_date": pick("releaseDate", "release_date", "year"),
-        "rating": pick("rating", "imdbRating", "score"),
-        "genre": pick("genre", "genres"),
-    }
-
-def _moviebox_run(coro_factory):
-    if not MOVIEBOX_ENABLED:
-        raise RuntimeError("MovieBox provider is not installed")
-    async def runner():
-        session = MovieBoxSession(timeout=15.0)
-        try:
-            return await coro_factory(session)
-        finally:
-            try:
-                await session._client.aclose()
-            except Exception:
-                pass
-    return asyncio.run(runner())
-
-def moviebox_search(query, kind="all", page=1):
-    query = (query or "").strip()[:80]
-    if not query:
-        return {"items": [], "pager": {}, "source": "moviebox"}
-    subject_type = _moviebox_subject_type(kind)
-    page = max(1, min(int(page or 1), 50))
-    def work(session):
-        async def go():
-            provider = MovieBoxSearch(
-                session=session,
-                query=query,
-                subject_type=subject_type,
-                page=page,
-                per_page=24,
-            )
-            return await provider.get_content()
-        return go()
-    data = _moviebox_run(work)
-    items = data.get("items", []) if isinstance(data, dict) else []
-    pager = data.get("pager", {}) if isinstance(data, dict) else {}
-    return {
-        "query": query,
-        "items": [_moviebox_normalize_item(x) for x in items],
-        "pager": pager,
-        "source": "moviebox",
-    }
-
-def moviebox_trending():
-    def work(session):
-        async def go():
-            provider = MovieBoxTrending(session=session, page=0, per_page=24)
-            return await provider.get_content()
-        return go()
-    data = _moviebox_run(work)
-    items = data.get("items", []) if isinstance(data, dict) else []
-    return {
-        "items": [_moviebox_normalize_item(x) for x in items],
-        "pager": data.get("pager", {}) if isinstance(data, dict) else {},
-        "source": "moviebox",
-    }
-
 # ---------------- misc ----------------
 def qr_datauri(url):
     try:
@@ -1063,6 +959,29 @@ h1{font-size:19px;font-weight:800;background:linear-gradient(90deg,var(--acc),
 .mini:hover{color:var(--acc);border-color:var(--acc)}
 label.tog{display:flex;align-items:center;gap:6px;font-size:13px;
  color:var(--mut);cursor:pointer}
+#sortWrap{padding:4px 8px;border:1px solid var(--line);border-radius:10px;
+ background:var(--chip)}
+#sortWrap .sort-label{font-size:12px;font-weight:700;color:var(--mut);
+ text-transform:uppercase;letter-spacing:.04em}
+#sort{padding:4px 8px;border-radius:8px;border:1px solid var(--line);
+ background:var(--card);color:var(--txt);font-size:13px;cursor:pointer}
+#sort:focus{outline:2px solid var(--acc);outline-offset:1px}
+#liveonlyWrap{padding:4px 10px;border:1px solid var(--line);border-radius:10px;
+ background:var(--chip);transition:all .15s ease}
+#liveonlyWrap:hover{border-color:var(--acc)}
+#liveonlyWrap.has-live{border-color:#ef4444;background:rgba(239,68,68,.08)}
+#liveonlyWrap.has-live .live-dot,
+#liveonlyWrap .live-dot{display:inline-block;width:8px;height:8px;border-radius:50%;
+ background:var(--mut);transition:all .15s ease}
+#liveonlyWrap.has-live .live-dot{background:#ef4444;box-shadow:0 0 0 0 rgba(239,68,68,.6);
+ animation:livePulse 1.6s infinite}
+@keyframes livePulse{0%{box-shadow:0 0 0 0 rgba(239,68,68,.6)}
+ 70%{box-shadow:0 0 0 6px rgba(239,68,68,0)}100%{box-shadow:0 0 0 0 rgba(239,68,68,0)}}
+#liveonlyWrap.has-live{color:#ef4444}
+#liveCount{display:inline-block;margin-left:4px;padding:1px 6px;border-radius:8px;
+ background:rgba(239,68,68,.15);color:#ef4444;font-size:11px;font-weight:700;
+ font-variant-numeric:tabular-nums;line-height:1.4}
+#liveCount:empty{display:none}
 #chips{display:flex;gap:6px;overflow-x:auto;padding:8px 0 2px;
  -webkit-overflow-scrolling:touch}
 #chips::-webkit-scrollbar{height:5px}
@@ -1363,13 +1282,41 @@ body[data-mode=podcasts] #panel-podcasts{display:block}
  #pbplay{order:2}#pbstop{order:3}
  #tvplayer{min-height:150px;max-height:48vh}
  .playeractions{display:grid;grid-template-columns:1fr 1fr}
- .playeractions .big{min-width:0;padding:10px 6px}
+ .playeractions .big{min-width:0;padding:12px 6px}
  .utilitygrid{grid-template-columns:1fr 1fr}
  #guide,#set,#themebtn,#help{display:none}
  body.playing #toast{bottom:180px}
+ #chips{margin:0 -2px;padding-bottom:5px}
+ #chips button{min-height:34px;padding:7px 10px}
+ .note{font-size:12px;line-height:1.45}
+ .grp{height:26px;white-space:normal;line-height:13px}
+ .dot,.fav{min-width:30px;min-height:30px}
+ .watch,.altvlc{min-height:40px}
  body{padding-top:env(safe-area-inset-top)}
  .card:hover{transform:none}
  .ni:hover,.mkrow:hover{transform:none}
+ /* --- Mobile toolbar cleanup (added for live-only + Sort dropdown) --- */
+ /* "Whole list in VLC" stays as an option on mobile, but smaller/secondary so it
+    doesn't dominate the toolbar — some streams don't play in-browser and VLC is
+    the reliable fallback. */
+ #playall{padding:6px 10px;font-size:11px;min-height:36px;flex:0 0 auto}
+ /* Hide the advanced "auto-check" and "online first" toggles on mobile — they take
+    space and most mobile users just want live-only + sort. Power users can still
+    access them via desktop. */
+ label.tog:has(#auto),label.tog:has(#okfirst){display:none}
+ /* Let the toolbar wrap nicely so search / live-only / sort each get room. */
+ .row2{flex-wrap:wrap;gap:8px;padding:6px 2px}
+ .row2 #q{flex:1 1 100%;margin-bottom:4px}
+ /* Make the live-only toggle and Sort dropdown touch-friendly (>=40px tall). */
+ #liveonlyWrap{flex:1 1 auto;min-height:40px;padding:8px 12px;
+  font-size:13px;justify-content:center}
+ #sortWrap{flex:1 1 auto;min-height:40px;padding:6px 10px}
+ #sort{width:100%;min-height:36px;padding:8px 10px;font-size:14px}
+ /* Player modal: "Play here" prominent (default), VLC + browser as secondary options
+    so users can fall back to VLC when a stream won't play in-browser. */
+ #playerplay{grid-column:1/-1;min-height:48px;font-size:15px;font-weight:800}
+ #playervlc,#playerexternal{min-height:40px;font-size:13px}
+ #playerhint{font-size:13px;line-height:1.5}
 }
 @media(max-width:600px){
  .podcard{flex-direction:column;align-items:flex-start}
@@ -1384,22 +1331,6 @@ body[data-mode=podcasts] #panel-podcasts{display:block}
 .podtext p{margin:0;}
 .podsource{margin:10px 0;}
 .podsource h4{margin:0 0 5px 0;color:var(--acc);}
-
-/* ===== MOVIES V2 ===== */
-#panel-movies{display:none;padding:8px 0 96px}
-#panel-movies .pbar2{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:10px 18px}
-#mvq{flex:1;min-width:180px;padding:9px 12px;border-radius:10px;border:1px solid var(--line);background:var(--card);color:var(--txt)}
-#mvtype{padding:8px 10px;font-size:12px}
-.mv-card{position:relative;text-align:left;min-height:270px}
-.mv-card img{width:100%;height:190px;object-fit:cover;border-radius:10px;background:var(--bg)}
-.mv-title{font-size:13px;font-weight:800;line-height:17px;min-height:34px}
-.mv-meta{font-size:11px;color:var(--mut);line-height:15px;min-height:30px}
-.mv-open{margin-top:auto;width:100%;text-align:center}
-@media(max-width:760px){
- #panel-movies .pbar2{padding:8px 10px}
- #mvq{width:100%;min-width:0;order:-1}
- .mv-card img{height:170px}
-}
 </style></head><body data-mode="media">
 <header>
  <div id="mainnav">
@@ -1409,7 +1340,6 @@ body[data-mode=podcasts] #panel-podcasts{display:block}
   <button data-mode="podcasts">&#127911; Podcasts</button>
   <button data-mode="markets">&#128200; Markets</button>
   <button data-mode="books">&#128218; Books</button>
-  <button data-mode="movies">&#127916; Movies</button>
  </div>
  <div class="row1">
   <button class="hdrbtn" id="home" title="Home" onclick="navigateTo('home')">&#x1F3E0;</button>
@@ -1429,6 +1359,22 @@ body[data-mode=podcasts] #panel-podcasts{display:block}
   <button class="big" id="playall">&#9654; Whole list in VLC</button>
   <label class="tog"><input type="checkbox" id="auto" checked> auto-check</label>
   <label class="tog"><input type="checkbox" id="okfirst" checked> online first</label>
+  <label class="tog" id="liveonlyWrap" title="Only show channels with a programme airing right now">
+   <input type="checkbox" id="liveonly"> 
+   <span class="live-dot"></span> live only
+   <span class="live-count" id="liveCount"></span>
+  </label>
+  <label class="tog" id="sortWrap">
+   <span class="sort-label">Sort</span>
+   <select id="sort">
+    <option value="default">Default</option>
+    <option value="live">Live now first</option>
+    <option value="name">Name A&rarr;Z</option>
+    <option value="name-desc">Name Z&rarr;A</option>
+    <option value="group">By category</option>
+    <option value="language">By language</option>
+   </select>
+  </label>
  </div>
  <div id="chips"></div>
 </header>
@@ -1464,30 +1410,6 @@ body[data-mode=podcasts] #panel-podcasts{display:block}
   <button class="big grey" id="bkprev">&lsaquo; Prev</button>
   <span id="bkpage"></span>
   <button class="big grey" id="bknext">Next &rsaquo;</button></div>
-</div>
-
-<div class="panel" id="panel-movies">
- <div class="pbar2">
-  <input id="mvq" placeholder="Search movies or TV series…" autocomplete="off">
-  <select id="mvtype" class="mini">
-   <option value="all">Movies + Series</option>
-   <option value="movie">Movies</option>
-   <option value="series">TV Series</option>
-  </select>
-  <button class="big" id="mvsearch">Search</button>
-  <button class="big blue" id="mvtrend">Trending</button>
- </div>
- <div class="note"><span id="mvstatus">Movie catalog provider ready when configured.</span></div>
- <div id="mvgrid" class="grid books"><div class="pempty">Search for a movie or series.</div></div>
- <div class="bpager">
-  <button class="big grey" id="mvprev">‹ Prev</button>
-  <span id="mvpage"></span>
-  <button class="big grey" id="mvnext">Next ›</button>
- </div>
- <div class="pempty" style="margin:10px 18px">
-  Sunrise Hub integrates MovieBox for discovery/metadata only. Playback or downloads are not
-  proxied by Sunrise Hub. Use content only where you have the legal right to access it.
- </div>
 </div>
 <div class="panel" id="panel-podcasts">
  <h3>Latest stories and podcasts</h3>
@@ -1642,7 +1564,13 @@ var IS_CLOUD=__CLOUD__;
 var CHUNK=ISMOBILE?60:120,CONC=ISMOBILE?3:4,MAXAUTO=ISMOBILE?80:240,
  TTL=20*60*1000;
 var S={pl:'in',chans:[],cat:'all',q:'',shown:0,queue:[],busy:0,autoN:0,
- now:{},cache:{}};
+ now:{},cache:{},sort:'default',liveonly:false};
+// Restore persisted sort/live-only prefs.
+(function(){try{var p=JSON.parse(localStorage.getItem('iptv-toolbar')||'{}');
+ if(p.sort)S.sort=p.sort;if(typeof p.liveonly==='boolean')S.liveonly=p.liveonly;
+}catch(e){}})();
+function saveToolbar(){try{localStorage.setItem('iptv-toolbar',
+ JSON.stringify({sort:S.sort,liveonly:S.liveonly}))}catch(e){}}
 S.favs=JSON.parse(localStorage.getItem('iptv-favs')||'[]');
 S.hist=JSON.parse(localStorage.getItem('iptv-hist')||'[]');
 // NEW: Universal personalization state (single source-of-truth)
@@ -2160,7 +2088,14 @@ function paintNow(){
   var it=findAny(c.dataset.u);if(!it)return;
   var a=nowFor(it),el=c.querySelector('.now');if(!el)return;
   el.textContent=a&&a.n?(a.n.t+' - till '+hhmm(a.n.e)):
-   (a&&a.x?('next: '+a.x.t+' @ '+hhmm(a.x.s)):'')})}
+   (a&&a.x?('next: '+a.x.t+' @ '+hhmm(a.x.s)):'')});
+ // Update the live-count badge next to the Live-only toggle.
+ updateLiveCount()}
+function updateLiveCount(){
+ var el=$('liveCount');if(!el)return;
+ if(!isTV(S.pl)||S.pl==='world'||!S.chans.length){el.textContent='';return}
+ var n=0;for(var i=0;i<S.chans.length;i++){var a=nowFor(S.chans[i]);if(a&&a.n)n++}
+ el.textContent=n?String(n):''}
 function loadNow(){
  if(!isTV(S.pl)||S.pl==='world'){S.now={};paintNow();return}
  fetch('/api/now?p='+S.pl).then(function(r){return r.json()})
@@ -2182,12 +2117,34 @@ function filtered(){var base=cur(),q=S.q.toLowerCase(),out=[];
   var hay=(it.n+' '+it.g+' '+(it.lg||'')).toLowerCase();
   if(q&&hay.indexOf(q)===-1)continue;
   if(S.cat!=='all'&&it.g!==S.cat)continue;
+  // Live-only filter: keep only channels whose EPG snapshot has a now-airing programme.
+  if(S.liveonly){var a=nowFor(it);if(!a||!a.n)continue}
   out.push(it)}
- if($('okfirst').checked){out=out.slice().sort(function(a,b){
-  var ca=fresh(a.u),cb=fresh(b.u);
-  var va=!ca?1:(ca.ok===true?0:(ca.ok===false?2:1));
-  var vb=!cb?1:(cb.ok===true?0:(cb.ok===false?2:1));
-  return va-vb})}
+ // Apply sort. `default` falls back to the legacy okfirst online-first behavior.
+ var sb=S.sort||'default';
+ if(sb==='online'||(sb==='default'&&$('okfirst').checked)){
+  out=out.slice().sort(function(a,b){
+   var ca=fresh(a.u),cb=fresh(b.u);
+   var va=!ca?1:(ca.ok===true?0:(ca.ok===false?2:1));
+   var vb=!cb?1:(cb.ok===true?0:(cb.ok===false?2:1));
+   return va-vb})}
+ else if(sb==='live'){out=out.slice().sort(function(a,b){
+  var aa=nowFor(a),bb=nowFor(b);
+  var la=aa&&aa.n?1:0,lb=bb&&bb.n?1:0;
+  if(la!==lb)return lb-la;
+  return String(a.n).localeCompare(String(b.n))})}
+ else if(sb==='name'){out=out.slice().sort(function(a,b){
+  return String(a.n).localeCompare(String(b.n))})}
+ else if(sb==='name-desc'){out=out.slice().sort(function(a,b){
+  return String(b.n).localeCompare(String(a.n))})}
+ else if(sb==='group'){out=out.slice().sort(function(a,b){
+  var ga=a.g||'~',gb=b.g||'~';
+  if(ga!==gb)return String(ga).localeCompare(String(gb));
+  return String(a.n).localeCompare(String(b.n))})}
+ else if(sb==='language'){out=out.slice().sort(function(a,b){
+  var la=(a.lg||'').split(',')[0]||'~',lb=(b.lg||'').split(',')[0]||'~';
+  if(la!==lb)return String(la).localeCompare(String(lb));
+  return String(a.n).localeCompare(String(b.n))})}
  return out}
 function buildChips(){var src=cur(),q=S.q.toLowerCase(),
  counts={},order=[],tot=0;
@@ -2353,7 +2310,10 @@ function playerPlay(){
   PLAYER.hls.attachMedia(v);
   PLAYER.hls.on(Hls.Events.MANIFEST_PARSED,function(){
    v.play().catch(function(){
-    $('playerhint').textContent='Tap the play button if autoplay is blocked by your browser.';
+    var isMob=/Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+    $('playerhint').textContent=isMob
+     ?'Tap "Play here" — your browser blocked autoplay. Or use "Open in VLC" as a fallback.'
+     :'Tap "Play here" — your browser blocked autoplay. Or try "Open in browser" / "Open in VLC".';
    });
   });
   PLAYER.hls.on(Hls.Events.ERROR,function(_event,data){
@@ -2366,9 +2326,14 @@ function playerPlay(){
   v.src=playbackUrl(PLAYER.url);
  }
  if(!isHls||nativeHls)v.play().catch(function(){
-  $('playerhint').textContent='Tap the play button if autoplay is blocked by your browser.'
+  var isMob=/Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+  $('playerhint').textContent=isMob
+   ?'Tap "Play here" — your browser blocked autoplay. Or use "Open in VLC" as a fallback.'
+   :'Tap "Play here" — your browser blocked autoplay. Or try "Open in browser" / "Open in VLC".';
  });
- $('playerhint').textContent='Playing in the phone browser. Source quality is automatic.';
+ // Don't overwrite the openPlayer() hint here — let the <video> event
+ // listeners (canplay / waiting / error) update it as the stream state
+ // changes. The initial hint from openPlayer stays until then.
 }
 function openVlcMobile(){
  if(!PLAYER.url)return;
@@ -2389,9 +2354,12 @@ function openPlayer(it,u){
  $('playertitle').textContent=(it.tp==='radio'?'Listen ':'Watch ')+
   plain(it.n||'stream').slice(0,60);
  $('playerhint').textContent=/Android|iPhone|iPad|iPod/i.test(navigator.userAgent)
-  ?'VLC can be opened when installed; otherwise play in this browser.'
+  ?'Playing in this browser. If the stream struggles, use "Open in VLC" below.'
   :'Choose a playback option.';
- $('playervlc').style.display=(vlcLink(u)||!IS_CLOUD)?'':'none';
+ // Always show VLC button on mobile so users have it as a fallback option
+ // (some streams won't play in-browser and need VLC).
+ var isMobile=/Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+ $('playervlc').style.display=(isMobile||vlcLink(u)||!IS_CLOUD)?'':'none';
  $('playerplay').style.display=/^https?:/i.test(u)?'':'none';
  $('playerexternal').style.display=/^https?:/i.test(u)?'':'none';
  showModal('playermodal',true);
@@ -2901,7 +2869,7 @@ function bPaint(){
   var fav=PS.isFavorite('books',b)?'⭐':'☆';
   h+='<div class="card book" data-id="'+b.id+'">'+
    (b.cov?'<img src="'+esc(b.cov)+'" loading="lazy" '+
-    'onerror="this.replaceWith(document.createElement(\\"div\\"))">':
+    'onerror="this.replaceWith(document.createElement(\\'div\\'))">':
     '<div class="nocov">&#128214;</div>')+
    '<div class="cname" title="'+esc(b.t)+'">'+esc(b.t)+'</div>'+
    '<div class="grp">'+esc(b.a)+'</div>'+
@@ -3069,7 +3037,15 @@ $('grid').onclick=function(e){
 $('q').addEventListener('input',function(){clearTimeout(window._qt);
  window._qt=setTimeout(function(){
   S.q=$('q').value.trim();
-  if(window.location.hash==='#home'){
+  // If user is in a media mode (TV/Radio with channels loaded), filter the
+  // current channel grid regardless of the URL hash. This fixes the defect
+  // where clicking the TV nav button from #home leaves the hash as #home,
+  // causing search to trigger global search instead of filtering channels.
+  var medMode=(MODE==='tv'||MODE==='radio'||MODE==='media');
+  if(medMode && S.chans.length>0){
+   if(!S.q)S.cat='all';
+   buildChips();render(true);
+  }else if(window.location.hash==='#home'){
    if(S.q.length>2){showGlobalSearch();}
    else{showHomeDashboard();}
   }else{
@@ -3091,6 +3067,22 @@ document.addEventListener('keydown',function(e){
   if(document.activeElement===$('q')&&MODE==='media'){
    $('q').value='';$('q').dispatchEvent(new Event('input'))}}});
 $('okfirst').addEventListener('change',function(){render(true)});
+// Sort dropdown.
+(function(){var sel=$('sort');if(!sel)return;
+ sel.value=S.sort||'default';
+ sel.addEventListener('change',function(){
+  S.sort=sel.value;saveToolbar();
+  if(S.sort==='live'&&!isTV(S.pl)){toast('Live-first sort needs a TV playlist','')}
+  buildChips();render(true)})})();
+// Live-only toggle.
+(function(){var cb=$('liveonly'),wrap=$('liveonlyWrap');if(!cb)return;
+ cb.checked=!!S.liveonly;
+ if(cb.checked)wrap.classList.add('has-live');
+ cb.addEventListener('change',function(){
+  S.liveonly=cb.checked;saveToolbar();
+  if(S.liveonly)wrap.classList.add('has-live');else wrap.classList.remove('has-live');
+  if(S.liveonly&&!isTV(S.pl)){toast('Live-only needs a TV playlist','')}
+  buildChips();render(true)})})();
 $('mob').onclick=function(){showModal('mobpanel',true)};
 $('set').onclick=function(){showModal('setpanel',true)};
 $('cacheclear').onclick=window.clearCache;
@@ -3124,67 +3116,6 @@ new IntersectionObserver(function(es){es.forEach(function(e){
  $('mlinks').innerHTML=h;
 })();
 window.load=load;load('in');setMode('tv');maybeWelcome();
-
-/* ===== MOVIES V2: isolated MovieBox discovery layer ===== */
-var MV={page:1,kind:'all',query:'',items:[],pager:{}};
-function mvEsc(s){return esc(s==null?'':String(s))}
-function mvCard(x){
- var poster=x.poster||'';
- var img=poster?'<img loading="lazy" src="'+mvEsc(poster)+'" alt="">':'<div style="height:190px;border-radius:10px;background:var(--bg);display:grid;place-items:center;font-size:42px">🎬</div>';
- var meta=[];
- if(x.release_date)meta.push(String(x.release_date).slice(0,10));
- if(x.rating)meta.push('★ '+x.rating);
- if(x.genre)meta.push(Array.isArray(x.genre)?x.genre.join(', '):String(x.genre));
- var href=x.page_url;
- return '<div class="card mv-card">'+img+
-   '<div class="mv-title">'+mvEsc(x.title)+'</div>'+
-   '<div class="mv-meta">'+mvEsc(meta.join(' • '))+'</div>'+
-   (href?'<a class="big mv-open" href="'+mvEsc(href)+'" target="_blank" rel="noopener">Open provider page</a>':'')+
-   '</div>';
-}
-function mvRender(){
- var g=$('mvgrid'),items=MV.items||[];
- $('mvpage').textContent=MV.page+' '+(MV.pager&&MV.pager.totalCount?' / '+MV.pager.totalCount:'');
- if(!items.length){g.innerHTML='<div class="pempty">No results. Try another title.</div>';return}
- g.innerHTML=items.map(mvCard).join('');
-}
-function mvRequest(path){
- $('mvstatus').textContent='Loading movie catalog…';
- fetch(path).then(function(r){
-   return r.json().then(function(j){if(!r.ok)throw new Error(j.error||'Provider error');return j})
- }).then(function(j){
-   MV.items=j.items||[];MV.pager=j.pager||{};mvRender();
-   $('mvstatus').textContent=(MV.items.length||0)+' results • source: '+(j.source||'provider');
- }).catch(function(e){
-   $('mvgrid').innerHTML='<div class="errbox"><h3>Movie provider unavailable</h3><p>'+mvEsc(e.message||'Unknown error')+'</p><br><button class="big" onclick="mvShowTrending()">Retry</button></div>';
-   $('mvstatus').textContent='Movie provider unavailable. Existing Sunrise Hub features are unaffected.';
- });
-}
-function mvSearch(){
- var q=($('mvq').value||'').trim();
- if(!q){mvShowTrending();return}
- MV.query=q;MV.kind=$('mvtype').value;MV.page=1;
- mvRequest('/api/movies/search?q='+encodeURIComponent(q)+'&type='+encodeURIComponent(MV.kind)+'&page=1');
-}
-function mvShowTrending(){
- MV.query='';MV.kind='all';MV.page=1;
- mvRequest('/api/movies/trending');
-}
-function mvPage(delta){
- var p=MV.page+delta;
- if(p<1)return;
- if(!MV.query){return}
- MV.page=p;
- mvRequest('/api/movies/search?q='+encodeURIComponent(MV.query)+'&type='+encodeURIComponent(MV.kind)+'&page='+p);
-}
-window.mvShowTrending=mvShowTrending;
-window.addEventListener('load',function(){
- if($('mvsearch'))$('mvsearch').onclick=mvSearch;
- if($('mvtrend'))$('mvtrend').onclick=mvShowTrending;
- if($('mvq'))$('mvq').addEventListener('keydown',function(e){if(e.key==='Enter')mvSearch()});
- if($('mvprev'))$('mvprev').onclick=function(){mvPage(-1)};
- if($('mvnext'))$('mvnext').onclick=function(){mvPage(1)};
-});
 </script></body></html>"""
 
 class Handler(BaseHTTPRequestHandler):
@@ -3208,6 +3139,20 @@ class Handler(BaseHTTPRequestHandler):
 
         if u.path == "/healthz":
             return self.send(200, "ok", "text/plain; charset=utf-8")
+
+        if u.path == "/js_check.js":
+            try:
+                source = Path(__file__).with_name("js_check.js").read_text(
+                    encoding="utf-8")
+                source = (source
+                          .replace("__PL__", qs.get("pl", ["{}"])[0])
+                          .replace("__CLOUD__", qs.get("cloud", ["false"])[0]))
+                return self.send(200, source,
+                                 "application/javascript; charset=utf-8",
+                                 [("Cache-Control", "no-cache")])
+            except OSError as exc:
+                return self.send(500, json.dumps({"error": str(exc)}),
+                                 "application/json")
 
         if u.path == "/media-proxy":
             source = qs.get("url", [""])[0].strip()
@@ -3342,6 +3287,12 @@ class Handler(BaseHTTPRequestHandler):
             page = (SHELL.replace("__PL__", pl_json)
                          .replace("__QRBLOCKS__", "".join(blocks))
                          .replace("__CLOUD__", "true" if IS_CLOUD else "false"))
+            script_url = "/js_check.js?pl=%s&cloud=%s" % (
+                quote(pl_json, safe=""), "true" if IS_CLOUD else "false")
+            page = re.sub(
+                r"<script>\s*var PL=.*?</script>",
+                '<script src="%s"></script>' % script_url,
+                page, count=1, flags=re.S)
             self.send(200, page)
 
         elif u.path == "/add":
@@ -3646,47 +3597,6 @@ class Handler(BaseHTTPRequestHandler):
             self.send(200, json.dumps(check_stream(url)),
                       "application/json")
 
-
-        elif u.path == "/api/movies/search":
-            if not MOVIEBOX_ENABLED:
-                return self.send(503, json.dumps({
-                    "error": "MovieBox provider is not installed",
-                    "source": "moviebox"
-                }), "application/json")
-            query = qs.get("q", [""])[0].strip()[:80]
-            kind = qs.get("type", ["all"])[0].strip().lower()
-            try:
-                page = max(1, min(int(qs.get("page", ["1"])[0] or 1), 50))
-            except Exception:
-                page = 1
-            if not query:
-                return self.send(400, '{"error":"missing query"}', "application/json")
-            try:
-                result = moviebox_search(query, kind, page)
-                self.send(200, json.dumps(result, ensure_ascii=True),
-                          "application/json")
-            except Exception as e:
-                self.send(502, json.dumps({
-                    "error": "Movie provider request failed: %s" % str(e)[:180],
-                    "source": "moviebox"
-                }), "application/json")
-
-        elif u.path == "/api/movies/trending":
-            if not MOVIEBOX_ENABLED:
-                return self.send(503, json.dumps({
-                    "error": "MovieBox provider is not installed",
-                    "source": "moviebox"
-                }), "application/json")
-            try:
-                result = moviebox_trending()
-                self.send(200, json.dumps(result, ensure_ascii=True),
-                          "application/json")
-            except Exception as e:
-                self.send(502, json.dumps({
-                    "error": "Movie provider request failed: %s" % str(e)[:180],
-                    "source": "moviebox"
-                }), "application/json")
-
         elif u.path == "/quit":
             self.send(200, "<h3 style='font-family:sans-serif'>Stopped.</h3>")
             if SRV is not None:
@@ -3806,31 +3716,11 @@ def register_market_routes(app):
         except Exception as exc:
             raise HTTPException(status_code=502, detail=str(exc))
 
-def register_movie_routes(app):
-    @app.get("/api/movies/search")
-    async def fastapi_movies_search(q: str = "", type: str = "all", page: int = 1):
-        if not MOVIEBOX_ENABLED:
-            raise HTTPException(status_code=503, detail="MovieBox provider is not installed")
-        try:
-            return await asyncio.to_thread(moviebox_search, q[:80], type, max(1, min(page, 50)))
-        except Exception as exc:
-            raise HTTPException(status_code=502, detail=str(exc)[:180])
-
-    @app.get("/api/movies/trending")
-    async def fastapi_movies_trending():
-        if not MOVIEBOX_ENABLED:
-            raise HTTPException(status_code=503, detail="MovieBox provider is not installed")
-        try:
-            return await asyncio.to_thread(moviebox_trending)
-        except Exception as exc:
-            raise HTTPException(status_code=502, detail=str(exc)[:180])
-
 if FastAPI is not None:
     fastapi_app = FastAPI(title="Sg_ent_media_radio API", version=VERSION)
     register_livestream_routes(fastapi_app)
     register_book_routes(fastapi_app)
     register_market_routes(fastapi_app)
-    register_movie_routes(fastapi_app)
 else:
     fastapi_app = None
 
@@ -3944,10 +3834,9 @@ def selftest():
         sc += _res("Books API", gc > 100, "%d hindi books" % gc)
     except Exception as e:
         _res("Books API", False, str(e)[:40])
-    sc += _res("MovieBox module", True, "installed" if MOVIEBOX_ENABLED else "optional/unavailable")
     sc += _res("Internet", net_ok(), "OK" if net_ok() else "offline")
     log("-" * 46)
-    log("RESULT: %s (%d/14 passed)" %
+    log("RESULT: %s (%d/13 passed)" %
         ("READY TO RUN" if sc >= 9 else "REVIEW WARNINGS ABOVE", sc))
     return 0 if sc >= 9 else 1
 
