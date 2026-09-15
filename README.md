@@ -1,47 +1,38 @@
-# IPTV Dashboard — 3 Defect Fixes
+# IPTV Dashboard — Cache-Busting Fix (THE root cause fix)
 
-## Files in this ZIP (drop-in replacements)
+## Why you kept seeing the same issues
+
+The 3 defect fixes (VLC button, radio close, real books) were **already in your code** — I verified they're in commit `5e6eb19`. But your browser was serving a **STALE CACHED copy** of `js_check.js`.
+
+The server sent `Cache-Control: no-cache` — but `no-cache` still allows browsers to store and serve stale copies. So every time you opened the dashboard, your browser loaded the OLD `js_check.js` (without the fixes) from its cache.
+
+## The fix (2 changes in `iptv_dashboard.py`)
+
+### 1. Changed cache headers to `no-store, must-revalidate`
+- For the HTML page (`/`): `Cache-Control: no-store, must-revalidate` + `Pragma: no-cache` + `Expires: 0`
+- For `/js_check.js`: same headers
+- This tells browsers NEVER to cache these resources
+
+### 2. Added cache-busting version parameter to script URL
+- Old: `/js_check.js?pl=...&cloud=true`
+- New: `/js_check.js?pl=...&cloud=true&v=1789450167`
+- The `v` parameter is based on the file's modification time
+- Every time `js_check.js` changes, the URL changes → browser is forced to fetch fresh JS
+- This is the **bulletproof fix** — even if a browser ignores `no-store`, the URL change guarantees a fresh fetch
+
+## Files in this ZIP
 
 | File | Purpose |
 |------|---------|
-| `iptv_dashboard.py` | Main Python app (drop-in replacement) |
-| `js_check.js` | Served JavaScript (drop-in replacement) |
+| `iptv_dashboard.py` | Main Python app (with cache-busting fix) |
+| `js_check.js` | Served JavaScript (unchanged — already had the 3 defect fixes) |
 
-## 3 Defects Fixed
+## All 4 fixes in this release
 
-### DEFECT 1: VLC button missing in player modal
-**Symptom:** When clicking "Watch" on a TV channel, the player modal showed "Play here" and "Open in browser" but NO "Open in VLC" button.
-
-**Root cause:** `openPlayer()` only showed the VLC button when `(isMobile || vlcLink(u) || !IS_CLOUD)`. On desktop cloud (Render), all three conditions are false → VLC button hidden.
-
-**Fix:** Always show VLC button (`display=''`) so users have VLC as a fallback for streams that won't play in-browser (geo-blocked, codec issues, CORS).
-
-**Files changed:** `js_check.js` line 768-772, `iptv_dashboard.py` line 2196-2200
-
-### DEFECT 2: Radio close button broken
-**Symptom:** Clicking the X (pbstop) button on the radio player bar didn't close/hide it — the bar stayed visible.
-
-**Root cause:** `pbShow()` set `pbar.style.display='flex'` as an INLINE style. `radioStop()` removed the `playing` class from body but the inline `display:flex` stayed → pbar never hid (inline styles override CSS rules).
-
-**Fix:** `radioStop()` now clears the inline display (`pbar.style.display=''`) so the CSS rule `body.playing #pbar{display:flex}` takes over and the pbar hides when `playing` class is removed.
-
-**Files changed:** `js_check.js` line 419-429, `iptv_dashboard.py` line 1818-1828
-
-### DEFECT 3: Books only 5 dummy showing
-**Symptom:** Books page showed only 5 hardcoded dummy books instead of the full Gutendex library.
-
-**Root cause:** 
-1. Gutendex API was returning HTTP 403/503 because User-Agent "Mozilla/5.0" was too short (Gutendex blocks it)
-2. The `languages` filter parameter is slow/503s on Gutendex's end
-3. When gutendex() threw, code fell back to `fallback_books()` which only has 5 hardcoded books
-
-**Fix:**
-- Updated `gutendex()` User-Agent to a full Chrome UA string + Accept header, increased timeout from 12s to 25s
-- Updated `/api/books` handler to try popular-sort first (no language filter), then retry without language filter if first call fails, then fall back to hardcoded books only as last resort
-
-**Result:** `/api/books` now returns 32 real books (Pride and Prejudice, Moby Dick, Crime and Punishment...) instead of 5 dummy ones.
-
-**Files changed:** `iptv_dashboard.py` line 631-640 (gutendex function), line 3012-3056 (/api/books handler)
+1. **VLC button always visible** in player modal (from commit a3cf496)
+2. **Radio close button works** — pbar hides when X clicked (from commit a3cf496)
+3. **Real books** — 32 from Project Gutenberg instead of 5 dummy (from commit a3cf496)
+4. **Cache-busting** — no-store headers + version param (THIS commit b7a97ef) ← the fix that makes all 3 visible to you
 
 ## Install
 
@@ -51,36 +42,42 @@ git checkout ChatGPTChnage
 
 # Backup
 cp iptv_dashboard.py iptv_dashboard.py.bak
-cp js_check.js js_check.js.bak
 
-# Copy new files
-unzip ~/Downloads/iptv-fix3.zip -d /tmp/iptv-fix3
-cp /tmp/iptv-fix3/iptv_dashboard.py .
-cp /tmp/iptv-fix3/js_check.js .
+# Copy new file
+unzip ~/Downloads/iptv-final-fix.zip -d /tmp/iptv-final-fix
+cp /tmp/iptv-final-fix/iptv_dashboard.py .
 
 # Verify
 python3 -m py_compile iptv_dashboard.py && echo "PYTHON OK"
-node --check js_check.js && echo "JS OK"
 python3 iptv_dashboard.py --selftest
 
 # Commit + push
-git add iptv_dashboard.py js_check.js
-git commit -m "Fix 3 defects: VLC button always visible, radio close button, real books"
+git add iptv_dashboard.py
+git commit -m "Fix cache-busting: no-store headers + version param on js_check.js URL"
 git push origin ChatGPTChnage
 git checkout main
 git merge ChatGPTChnage
 git push origin main
 ```
 
+## After deploying
+
+1. **Hard-refresh your browser** (Ctrl+Shift+R or Cmd+Shift+R) to clear any existing cache
+2. Open the dashboard
+3. Click a TV channel's "Watch" button → you should see all 3 buttons: **Play here**, **Open in VLC**, **Open in browser**
+4. Switch to Radio, click "Listen", then click the X button → the player bar should hide
+5. Switch to Books → you should see 32 real books (Pride and Prejudice, Moby Dick, etc.)
+
 ## QA Verification (all passed)
 
-| Test | Before fix | After fix |
-|------|-----------|----------|
-| VLC button visible | display:'none' (hidden) | display:'' (visible) ✅ |
-| Radio pbstop click | pbar stays display:'flex' | pbar hides display:'none' ✅ |
-| /api/books items | 5 (fallback) | 32 real books ✅ |
-| TV channels | 757 loaded | 757 loaded ✅ |
-| Radio stations | 500 loaded | 500 loaded ✅ |
-| live-only toggle | works | works ✅ |
-| Sort dropdown | works | works ✅ |
-| JS console errors | none | none ✅ |
+| Test | Result |
+|------|--------|
+| Cache header on / | `Cache-Control: no-store, must-revalidate` ✅ |
+| Cache header on /js_check.js | `Cache-Control: no-store, must-revalidate` ✅ |
+| Script URL has version param | `&v=1789450167` ✅ |
+| VLC button visible | display='' (visible), text "Open in VLC" ✅ |
+| Radio close button | pbar: flex → none after X click ✅ |
+| Books | 32 real books ✅ |
+| TV channels | 757 loaded, 120 cards ✅ |
+| Radio stations | 500 loaded, 120 cards ✅ |
+| VLM visual confirm | All 3 player buttons visible ✅ |

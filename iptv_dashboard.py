@@ -2826,7 +2826,9 @@ class Handler(BaseHTTPRequestHandler):
                           .replace("__CLOUD__", qs.get("cloud", ["false"])[0]))
                 return self.send(200, source,
                                  "application/javascript; charset=utf-8",
-                                 [("Cache-Control", "no-cache")])
+                                 [("Cache-Control", "no-store, must-revalidate"),
+                                  ("Pragma", "no-cache"),
+                                  ("Expires", "0")])
             except OSError as exc:
                 return self.send(500, json.dumps({"error": str(exc)}),
                                  "application/json")
@@ -2946,13 +2948,23 @@ class Handler(BaseHTTPRequestHandler):
                 ensure_ascii=True).replace("</", "<\\/")
             page = (SHELL.replace("__PL__", pl_json)
                          .replace("__CLOUD__", "true" if IS_CLOUD else "false"))
-            script_url = "/js_check.js?pl=%s&cloud=%s" % (
-                quote(pl_json, safe=""), "true" if IS_CLOUD else "false")
+            # Cache-busting: append a version param based on the file's mtime
+            # so browsers always fetch fresh JS when the file changes (fixes
+            # the "stale js_check.js" defect where users see old code).
+            try:
+                js_mtime = int(Path(__file__).with_name("js_check.js").stat().st_mtime)
+            except Exception:
+                js_mtime = int(time.time())
+            script_url = "/js_check.js?pl=%s&cloud=%s&v=%d" % (
+                quote(pl_json, safe=""), "true" if IS_CLOUD else "false", js_mtime)
             page = re.sub(
                 r"<script>\s*var PL=.*?</script>",
                 '<script src="%s"></script>' % script_url,
                 page, count=1, flags=re.S)
-            self.send(200, page)
+            self.send(200, page, "text/html; charset=utf-8",
+                      [("Cache-Control", "no-store, must-revalidate"),
+                       ("Pragma", "no-cache"),
+                       ("Expires", "0")])
 
         elif u.path == "/add":
             url = qs.get("url", [""])[0].strip()
