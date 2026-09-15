@@ -1000,6 +1000,8 @@ body.playing #pbar{display:flex}
 body[data-mode=news] #panel-news{display:block}
 body[data-mode=books] #panel-books{display:block}
 body[data-mode=podcasts] #panel-podcasts{display:block}
+body[data-mode=today] #panel-today{display:block}
+body[data-mode=space] #panel-space{display:block}
 .utilitygrid{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}
 .utilitygrid .hdrbtn{border:1px solid var(--line);border-radius:10px;padding:10px}
 .charttools{display:flex;gap:6px;flex-wrap:wrap;margin:8px 0}
@@ -1095,6 +1097,56 @@ body[data-mode=podcasts] #panel-podcasts{display:block}
  place-items:center;font-size:34px}
 .bpager{display:flex;gap:14px;align-items:center;justify-content:center;
  padding:8px 0 20px;color:var(--mut);font-size:13px}
+/* ===== Today + Space panels ===== */
+.today-grid,.space-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));
+ gap:16px;margin-top:16px}
+.today-card,.space-card{background:var(--card);border:2px solid var(--line);
+ border-radius:14px;padding:18px;box-shadow:var(--sh)}
+.today-card h4,.space-card h4{font-size:var(--fs-lg);font-weight:800;margin-bottom:10px;
+ color:var(--acc);display:flex;align-items:center;gap:8px}
+.today-card .big-num,.space-card .big-num{font-size:28px;font-weight:800;
+ color:var(--txt);line-height:1.2;margin:8px 0}
+.today-card .sub,.space-card .sub{font-size:var(--fs-sm);color:var(--mut);
+ line-height:1.5;margin-top:6px}
+.today-card ul,.space-card ul{list-style:none;padding:0;margin:8px 0}
+.today-card li,.space-card li{font-size:var(--fs-sm);padding:8px 0;
+ border-bottom:1px solid var(--line);line-height:1.5}
+.today-card li:last-child,.space-card li:last-child{border-bottom:0}
+.today-card .quote-text{font-style:italic;font-size:var(--fs-base);
+ line-height:1.6;color:var(--txt)}
+.today-card .quote-author{font-size:var(--fs-sm);color:var(--mut);
+ margin-top:8px;font-weight:600}
+.today-card .word{font-size:24px;font-weight:800;color:var(--acc);
+ text-transform:capitalize;margin-bottom:4px}
+.today-card .phonetic{font-size:var(--fs-sm);color:var(--mut);font-style:italic;
+ margin-bottom:8px}
+.today-card .word-def{font-size:var(--fs-sm);line-height:1.5;color:var(--txt)}
+.today-card .word-example{font-size:var(--fs-xs);color:var(--mut);
+ margin-top:6px;font-style:italic}
+.space-card img.apod{width:100%;border-radius:10px;margin:8px 0;
+ background:#000;max-height:300px;object-fit:cover}
+.space-card .iss-coords{font-family:monospace;font-size:var(--fs-sm);
+ color:var(--acc2);background:var(--chip);padding:8px 12px;border-radius:8px;
+ display:inline-block}
+.space-card .astronaut-list{font-size:var(--fs-xs);color:var(--mut);
+ margin-top:8px;line-height:1.6}
+#dictInput{flex:1;min-width:200px;padding:10px 14px;border-radius:10px;
+ font-size:var(--fs-sm);border:2px solid var(--line);background:var(--card);
+ color:var(--txt);min-height:44px}
+.dict-result-card{background:var(--card);border:2px solid var(--line);
+ border-radius:12px;padding:16px;margin-top:12px}
+.dict-result-card .word{font-size:22px;font-weight:800;color:var(--acc);
+ text-transform:capitalize}
+.dict-result-card .phonetic{font-size:var(--fs-sm);color:var(--mut);
+ font-style:italic;margin-bottom:8px}
+.dict-result-card .meaning{font-size:var(--fs-sm);line-height:1.5;
+ margin-top:8px;padding-top:8px;border-top:1px solid var(--line)}
+@media(max-width:760px){
+ .today-grid,.space-grid{grid-template-columns:1fr;gap:12px}
+ .today-card,.space-card{padding:14px}
+ .today-card h4,.space-card h4{font-size:var(--fs-base)}
+ .today-card .big-num,.space-card .big-num{font-size:24px}
+}
 /* reader + bookview */
 .reader h3{line-height:1.35}
 #rvbody{font-size:15px;line-height:1.75;color:var(--txt);white-space:pre-wrap;
@@ -1203,6 +1255,8 @@ body[data-mode=podcasts] #panel-podcasts{display:block}
   <button data-mode="news">&#128240; News</button>
   <button data-mode="podcasts">&#127911; Podcasts</button>
   <button data-mode="books">&#128218; Books</button>
+  <button data-mode="today">&#128197; Today</button>
+  <button data-mode="space">&#128640; Space</button>
  </div>
  <div class="row1">
   <button class="hdrbtn" id="home" title="Home" onclick="navigateTo('home')">&#x1F3E0;</button>
@@ -1276,6 +1330,30 @@ body[data-mode=podcasts] #panel-podcasts{display:block}
  <div class="pbar2"><input id="podq" placeholder="Filter stories or shows…" autocomplete="off">
   <button class="big blue" id="podrefresh">Refresh</button></div>
  <div id="podlist" class="podlist"><div class="pempty">Loading podcasts...</div></div>
+</div>
+
+<div class="panel" id="panel-today">
+ <h3>&#128197; Today's Briefing</h3>
+ <p class="note">Weather, quote, word of the day, historical events &amp; upcoming holidays.</p>
+ <div id="todayGrid" class="today-grid">
+  <div class="pempty">Loading today's briefing...</div>
+ </div>
+ <h4 style="margin:20px 0 8px">&#128270; Dictionary Lookup</h4>
+ <div class="pbar2">
+  <input id="dictInput" placeholder="Type any English word to look up its definition…" autocomplete="off">
+  <button class="big blue" id="dictSearch">Look Up</button>
+ </div>
+ <div id="dictResult"></div>
+ <button class="big blue" id="todayRefresh" style="margin-top:16px">Refresh</button>
+</div>
+
+<div class="panel" id="panel-space">
+ <h3>&#128640; Space &amp; Science</h3>
+ <p class="note">NASA Astronomy Picture of the Day, live ISS tracker &amp; astronauts in space.</p>
+ <div id="spaceGrid" class="space-grid">
+  <div class="pempty">Loading space data...</div>
+ </div>
+ <button class="big blue" id="spaceRefresh" style="margin-top:16px">Refresh</button>
 </div>
 
 <div id="loader"><div><div class="spin"></div>Loading&hellip;</div></div>
@@ -3020,6 +3098,243 @@ class Handler(BaseHTTPRequestHandler):
 
 
 
+
+        # ===== TODAY PANEL: weather + quote + on-this-day + holidays + word-of-the-day =====
+        elif u.path == "/api/today":
+            # Combines: Open-Meteo weather + ZenQuotes + Wikipedia on-this-day
+            # + Nager.Date holidays (with IN fallback) + freeDictionaryAPI word-of-the-day.
+            # All free, no API key required.
+            try:
+                lat = float(qs.get("lat", ["19.0760"])[0])  # default Mumbai
+                lng = float(qs.get("lng", ["72.8777"])[0])
+            except Exception:
+                lat, lng = 19.0760, 72.8777
+            out = {}
+            # Weather (Open-Meteo)
+            try:
+                wurl = ("https://api.open-meteo.com/v1/forecast?latitude=%s"
+                        "&longitude=%s&current=temperature_2m,relative_humidity_2m,"
+                        "weather_code,wind_speed_10m&timezone=auto" % (lat, lng))
+                wreq = urllib.request.Request(wurl, headers={"User-Agent": "Mozilla/5.0"})
+                with urllib.request.urlopen(wreq, timeout=8) as r:
+                    wd = json.loads(r.read().decode("utf-8", errors="replace"))
+                cur = wd.get("current", {})
+                code = cur.get("weather_code", 0)
+                wmo = {0: "Clear sky", 1: "Mainly clear", 2: "Partly cloudy",
+                       3: "Overcast", 45: "Fog", 48: "Rime fog",
+                       51: "Light drizzle", 53: "Drizzle", 55: "Heavy drizzle",
+                       61: "Light rain", 63: "Rain", 65: "Heavy rain",
+                       71: "Light snow", 73: "Snow", 75: "Heavy snow",
+                       80: "Rain showers", 81: "Showers", 82: "Heavy showers",
+                       95: "Thunderstorm", 96: "Storm + hail", 99: "Heavy storm"}
+                out["weather"] = {
+                    "temp": cur.get("temperature_2m"),
+                    "humidity": cur.get("relative_humidity_2m"),
+                    "wind": cur.get("wind_speed_10m"),
+                    "condition": wmo.get(code, "Unknown (code %s)" % code),
+                    "timezone": wd.get("timezone", ""),
+                }
+            except Exception as e:
+                out["weather"] = {"error": str(e)[:80]}
+            # Quote (ZenQuotes)
+            try:
+                qreq = urllib.request.Request("https://zenquotes.io/api/random",
+                                              headers={"User-Agent": "Mozilla/5.0"})
+                with urllib.request.urlopen(qreq, timeout=8) as r:
+                    qd = json.loads(r.read().decode("utf-8", errors="replace"))
+                if qd and isinstance(qd, list):
+                    out["quote"] = {"text": qd[0].get("q", ""),
+                                    "author": qd[0].get("a", "")}
+            except Exception as e:
+                out["quote"] = {"error": str(e)[:80]}
+            # On this day (Wikipedia)
+            try:
+                import datetime as _dt
+                now = _dt.datetime.now()
+                oturl = ("https://en.wikipedia.org/api/rest_v1/feed/onthisday/events/%02d/%02d"
+                         % (now.month, now.day))
+                otreq = urllib.request.Request(oturl,
+                    headers={"User-Agent": "SgEntMediaRadio/11.0 (https://example.org)"})
+                with urllib.request.urlopen(otreq, timeout=8) as r:
+                    otd = json.loads(r.read().decode("utf-8", errors="replace"))
+                events = otd.get("events", [])[:5]
+                out["onThisDay"] = [{"year": e.get("year"),
+                                     "text": re.sub(r"<[^>]+>", "", e.get("text", ""))[:200]}
+                                    for e in events]
+            except Exception as e:
+                out["onThisDay"] = {"error": str(e)[:80]}
+            # Upcoming holidays (Nager.Date + IN fallback)
+            try:
+                import datetime as _dt2
+                year = _dt2.datetime.now().year
+                cc = qs.get("cc", ["IN"])[0].upper()[:2]
+                hurl = "https://date.nager.at/api/v3/PublicHolidays/%d/%s" % (year, cc)
+                hreq = urllib.request.Request(hurl,
+                    headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
+                             "Accept": "application/json"})
+                hd = []
+                try:
+                    with urllib.request.urlopen(hreq, timeout=8) as r:
+                        body = r.read().decode("utf-8", errors="replace")
+                        if body:
+                            hd = json.loads(body)
+                except Exception:
+                    hd = []
+                if not hd and cc == "IN":
+                    hd = [
+                        {"date": "%d-01-26" % year, "localName": "Republic Day", "types": ["Public"]},
+                        {"date": "%d-03-14" % year, "localName": "Holi", "types": ["Public"]},
+                        {"date": "%d-04-14" % year, "localName": "Ram Navami", "types": ["Public"]},
+                        {"date": "%d-05-01" % year, "localName": "Labour Day", "types": ["Public"]},
+                        {"date": "%d-08-15" % year, "localName": "Independence Day", "types": ["Public"]},
+                        {"date": "%d-08-31" % year, "localName": "Raksha Bandhan", "types": ["Public"]},
+                        {"date": "%d-10-02" % year, "localName": "Gandhi Jayanti", "types": ["Public"]},
+                        {"date": "%d-10-21" % year, "localName": "Dussehra", "types": ["Public"]},
+                        {"date": "%d-11-01" % year, "localName": "Diwali", "types": ["Public"]},
+                        {"date": "%d-12-25" % year, "localName": "Christmas", "types": ["Public"]},
+                    ]
+                today_str = _dt2.datetime.now().strftime("%Y-%m-%d")
+                upcoming = [h for h in hd if h.get("date", "") >= today_str][:5]
+                out["holidays"] = [{"date": h.get("date"),
+                                    "name": h.get("localName") or h.get("name"),
+                                    "type": h.get("types", [""])[0] if h.get("types") else ""}
+                                   for h in upcoming]
+            except Exception as e:
+                out["holidays"] = {"error": str(e)[:80]}
+            # Word of the Day (freeDictionaryAPI + random word)
+            try:
+                import datetime as _dt3
+                # Use a deterministic word based on the date so it changes daily
+                # but is consistent within a day.
+                day_of_year = _dt3.datetime.now().timetuple().tm_yday
+                word_pool = ["serendipity", "ephemeral", "eloquent", "resilient",
+                             "luminous", "quintessential", "mellifluous", "epiphany",
+                             "wanderlust", "petrichor", "effervescent", "solitude",
+                             "halcyon", "labyrinth", "zenith", "nostalgia",
+                             "euphoria", "cacophony", "luminance", "whimsical",
+                             "cascade", "horizon", "tranquil", "vivacious",
+                             "ambience", "ethereal", "radiant", "harmony",
+                             "reflection", "gratitude", "curiosity", "imagination"]
+                word = word_pool[day_of_year % len(word_pool)]
+                durl = "https://api.dictionaryapi.dev/api/v2/entries/en/%s" % word
+                dreq = urllib.request.Request(durl, headers={"User-Agent": "Mozilla/5.0"})
+                with urllib.request.urlopen(dreq, timeout=25) as r:
+                    dd = json.loads(r.read().decode("utf-8", errors="replace"))
+                if isinstance(dd, list) and dd:
+                    e = dd[0]
+                    meanings = e.get("meanings", [])
+                    first_meaning = meanings[0] if meanings else {}
+                    defs = first_meaning.get("definitions", [])
+                    first_def = defs[0] if defs else {}
+                    phonetics = e.get("phonetics", [])
+                    audio = ""
+                    for p in phonetics:
+                        if p.get("audio"):
+                            audio = p.get("audio")
+                            break
+                    out["wordOfDay"] = {
+                        "word": e.get("word", word),
+                        "phonetic": e.get("phonetic") or (phonetics[0].get("text") if phonetics else ""),
+                        "partOfSpeech": first_meaning.get("partOfSpeech", ""),
+                        "definition": first_def.get("definition", ""),
+                        "example": first_def.get("example", ""),
+                        "audio": audio,
+                    }
+            except Exception as e:
+                out["wordOfDay"] = {"error": str(e)[:80]}
+            self.send(200, json.dumps(out, ensure_ascii=True), "application/json",
+                      [("Cache-Control", "no-store, max-age=0")])
+
+        # Dictionary lookup (freeDictionaryAPI)
+        elif u.path == "/api/dictionary":
+            word = qs.get("w", [""])[0].strip()[:50].lower()
+            if not word:
+                self.send(400, '{"error":"no word provided (use ?w=word)"}',
+                          "application/json")
+                return
+            try:
+                durl = "https://api.dictionaryapi.dev/api/v2/entries/en/%s" % quote(word, safe="")
+                dreq = urllib.request.Request(durl, headers={"User-Agent": "Mozilla/5.0"})
+                with urllib.request.urlopen(dreq, timeout=25) as r:
+                    dd = json.loads(r.read().decode("utf-8", errors="replace"))
+                if isinstance(dd, list) and dd:
+                    e = dd[0]
+                    meanings = e.get("meanings", [])
+                    first_meaning = meanings[0] if meanings else {}
+                    defs = first_meaning.get("definitions", [])
+                    first_def = defs[0] if defs else {}
+                    phonetics = e.get("phonetics", [])
+                    audio = ""
+                    for p in phonetics:
+                        if p.get("audio"):
+                            audio = p.get("audio")
+                            break
+                    self.send(200, json.dumps({
+                        "word": e.get("word", word),
+                        "phonetic": e.get("phonetic") or (phonetics[0].get("text") if phonetics else ""),
+                        "partOfSpeech": first_meaning.get("partOfSpeech", ""),
+                        "definition": first_def.get("definition", ""),
+                        "example": first_def.get("example", ""),
+                        "audio": audio,
+                        "all_meanings": [{"part": m.get("partOfSpeech", ""),
+                                          "definitions": [d.get("definition", "") for d in m.get("definitions", [])[:3]]}
+                                         for m in meanings[:3]],
+                    }, ensure_ascii=True), "application/json",
+                        [("Cache-Control", "no-store, max-age=0")])
+                else:
+                    self.send(200, json.dumps({"error": "Word not found"},
+                                              ensure_ascii=True), "application/json")
+            except Exception as e:
+                self.send(200, json.dumps({"error": str(e)[:80]},
+                                          ensure_ascii=True), "application/json")
+
+        # ===== SPACE PANEL: NASA APOD + ISS tracker + astronauts =====
+        elif u.path == "/api/space":
+            out = {}
+            # NASA APOD (DEMO_KEY works for limited requests)
+            try:
+                aurl = "https://api.nasa.gov/planetary/apod?api_key=DEMO_KEY"
+                areq = urllib.request.Request(aurl, headers={"User-Agent": "Mozilla/5.0"})
+                with urllib.request.urlopen(areq, timeout=10) as r:
+                    ad = json.loads(r.read().decode("utf-8", errors="replace"))
+                out["apod"] = {
+                    "title": ad.get("title", ""),
+                    "date": ad.get("date", ""),
+                    "explanation": (ad.get("explanation") or "")[:400],
+                    "url": ad.get("url", ""),
+                    "hdurl": ad.get("hdurl", ""),
+                    "media_type": ad.get("media_type", "image"),
+                }
+            except Exception as e:
+                out["apod"] = {"error": str(e)[:80]}
+            # ISS current position (Open Notify)
+            try:
+                ireq = urllib.request.Request("http://api.open-notify.org/iss-now.json",
+                                              headers={"User-Agent": "Mozilla/5.0"})
+                with urllib.request.urlopen(ireq, timeout=8) as r:
+                    id_ = json.loads(r.read().decode("utf-8", errors="replace"))
+                iss = id_.get("issPosition", {})
+                out["iss"] = {
+                    "lat": iss.get("latitude"),
+                    "lng": iss.get("longitude"),
+                    "timestamp": id_.get("timestamp"),
+                }
+            except Exception as e:
+                out["iss"] = {"error": str(e)[:80]}
+            # People in space
+            try:
+                preq = urllib.request.Request("http://api.open-notify.org/astros.json",
+                                              headers={"User-Agent": "Mozilla/5.0"})
+                with urllib.request.urlopen(preq, timeout=8) as r:
+                    pd_ = json.loads(r.read().decode("utf-8", errors="replace"))
+                out["people"] = {
+                    "count": pd_.get("number", 0),
+                    "names": [p.get("name", "") for p in pd_.get("people", [])],
+                }
+            except Exception as e:
+                out["people"] = {"error": str(e)[:80]}
+            self.send(200, json.dumps(out, ensure_ascii=True), "application/json",
+                      [("Cache-Control", "no-store, max-age=0")])
 
         elif u.path == "/api/books":
             qstr = qs.get("q", [""])[0].strip()[:60]

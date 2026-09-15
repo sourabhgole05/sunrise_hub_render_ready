@@ -1,38 +1,63 @@
-# IPTV Dashboard — Cache-Busting Fix (THE root cause fix)
+# IPTV Dashboard — Latest Build (Today + Space + Dictionary Panels)
 
-## Why you kept seeing the same issues
+## Files in this ZIP (drop-in replacements)
 
-The 3 defect fixes (VLC button, radio close, real books) were **already in your code** — I verified they're in commit `5e6eb19`. But your browser was serving a **STALE CACHED copy** of `js_check.js`.
+| File | Size | Purpose |
+|------|------|---------|
+| `iptv_dashboard.py` | 178 KB | Main Python app (all new API routes + panels + CSS) |
+| `js_check.js` | 70 KB | Served JavaScript (all new modules) |
 
-The server sent `Cache-Control: no-cache` — but `no-cache` still allows browsers to store and serve stale copies. So every time you opened the dashboard, your browser loaded the OLD `js_check.js` (without the fixes) from its cache.
+## What's Included
 
-## The fix (2 changes in `iptv_dashboard.py`)
+### Existing Features (all working)
+- 📺 TV (757 channels from iptv-org)
+- 🎙 Radio (500 stations from radio-browser)
+- 📰 News (RSS feeds: NDTV, Times of India, Google News, etc.)
+- 🎧 Podcasts (RSS feeds)
+- 📚 Books (Project Gutenberg via Gutendex)
+- VLC player integration (Play here + Open in VLC + Open in browser)
+- live-only toggle + Sort dropdown
+- Age-friendly UI (large text, high contrast, 44px+ touch targets)
 
-### 1. Changed cache headers to `no-store, must-revalidate`
-- For the HTML page (`/`): `Cache-Control: no-store, must-revalidate` + `Pragma: no-cache` + `Expires: 0`
-- For `/js_check.js`: same headers
-- This tells browsers NEVER to cache these resources
+### New Features Added
 
-### 2. Added cache-busting version parameter to script URL
-- Old: `/js_check.js?pl=...&cloud=true`
-- New: `/js_check.js?pl=...&cloud=true&v=1789450167`
-- The `v` parameter is based on the file's modification time
-- Every time `js_check.js` changes, the URL changes → browser is forced to fetch fresh JS
-- This is the **bulletproof fix** — even if a browser ignores `no-store`, the URL change guarantees a fresh fetch
+#### 📅 Today Panel (Daily Briefing)
+Combines 5 free APIs in one call (`/api/today`):
+1. **Weather** (Open-Meteo) — temp, humidity, wind, condition
+2. **Daily Quote** (ZenQuotes) — inspirational quote
+3. **Word of the Day** (freeDictionaryAPI) — word + phonetic + definition + ▶ Pronounce
+4. **On This Day** (Wikipedia REST) — 5 historical events
+5. **Upcoming Holidays** (Nager.Date + IN fallback) — next 5 holidays
 
-## Files in this ZIP
+#### 🔍 Dictionary Lookup (in Today panel)
+- Input field + "Look Up" button
+- Type any English word → get definition, phonetic, example, audio pronunciation
+- Source: freeDictionaryAPI (free, no key)
+- Press Enter to search
 
-| File | Purpose |
-|------|---------|
-| `iptv_dashboard.py` | Main Python app (with cache-busting fix) |
-| `js_check.js` | Served JavaScript (unchanged — already had the 3 defect fixes) |
+#### 🚀 Space Panel (NASA + ISS)
+Combines 3 free APIs in one call (`/api/space`):
+1. **NASA APOD** — Astronomy Picture of the Day (image + title + explanation)
+2. **ISS Live Position** (Open Notify) — current lat/lng of International Space Station
+3. **Astronauts in Space** (Open Notify) — count + names of people in space
 
-## All 4 fixes in this release
+## All APIs Used (all free, no key, no signup)
 
-1. **VLC button always visible** in player modal (from commit a3cf496)
-2. **Radio close button works** — pbar hides when X clicked (from commit a3cf496)
-3. **Real books** — 32 from Project Gutenberg instead of 5 dummy (from commit a3cf496)
-4. **Cache-busting** — no-store headers + version param (THIS commit b7a97ef) ← the fix that makes all 3 visible to you
+| # | API | Used for |
+|---|-----|----------|
+| 1 | Open-Meteo | Weather |
+| 2 | ZenQuotes | Daily quote |
+| 3 | freeDictionaryAPI | Word of the Day + Dictionary lookup |
+| 4 | Wikipedia REST | On This Day |
+| 5 | Nager.Date | Public holidays |
+| 6 | NASA APOD | Astronomy Picture of the Day |
+| 7 | Open Notify | ISS position + astronauts |
+| 8 | iptv-org | TV channels |
+| 9 | radio-browser.info | Radio stations |
+| 10 | Gutendex | Books |
+
+## Marketstack Removed
+Per your request, the Marketstack stock market API has been fully removed (all traces: API routes, nav button, panel, JS module, CSS).
 
 ## Install
 
@@ -40,44 +65,45 @@ The server sent `Cache-Control: no-cache` — but `no-cache` still allows browse
 cd /path/to/sunrise_hub_render_ready
 git checkout ChatGPTChnage
 
-# Backup
+# Backup current files
 cp iptv_dashboard.py iptv_dashboard.py.bak
+cp js_check.js js_check.js.bak
 
-# Copy new file
-unzip ~/Downloads/iptv-final-fix.zip -d /tmp/iptv-final-fix
-cp /tmp/iptv-final-fix/iptv_dashboard.py .
+# Extract and copy new files
+unzip ~/Downloads/iptv-latest.zip -d /tmp/iptv-latest
+cp /tmp/iptv-latest/iptv_dashboard.py .
+cp /tmp/iptv-latest/js_check.js .
 
 # Verify
 python3 -m py_compile iptv_dashboard.py && echo "PYTHON OK"
+node --check js_check.js && echo "JS OK"
 python3 iptv_dashboard.py --selftest
 
 # Commit + push
-git add iptv_dashboard.py
-git commit -m "Fix cache-busting: no-store headers + version param on js_check.js URL"
+git add iptv_dashboard.py js_check.js
+git commit -m "Add Today + Space + Dictionary panels; remove Marketstack"
 git push origin ChatGPTChnage
 git checkout main
 git merge ChatGPTChnage
 git push origin main
 ```
 
-## After deploying
+## After Deploying
 
-1. **Hard-refresh your browser** (Ctrl+Shift+R or Cmd+Shift+R) to clear any existing cache
-2. Open the dashboard
-3. Click a TV channel's "Watch" button → you should see all 3 buttons: **Play here**, **Open in VLC**, **Open in browser**
-4. Switch to Radio, click "Listen", then click the X button → the player bar should hide
-5. Switch to Books → you should see 32 real books (Pride and Prejudice, Moby Dick, etc.)
+1. Hard-refresh your browser (Ctrl+Shift+R) to clear cache
+2. You'll see 7 nav tabs: TV, Radio, News, Podcasts, Books, **Today**, **Space**
+3. Click **📅 Today** for weather + quote + word of the day + dictionary + holidays
+4. Click **🚀 Space** for NASA APOD + ISS tracker + astronauts
 
-## QA Verification (all passed)
+## QA Verified
 
-| Test | Result |
-|------|--------|
-| Cache header on / | `Cache-Control: no-store, must-revalidate` ✅ |
-| Cache header on /js_check.js | `Cache-Control: no-store, must-revalidate` ✅ |
-| Script URL has version param | `&v=1789450167` ✅ |
-| VLC button visible | display='' (visible), text "Open in VLC" ✅ |
-| Radio close button | pbar: flex → none after X click ✅ |
-| Books | 32 real books ✅ |
-| TV channels | 757 loaded, 120 cards ✅ |
-| Radio stations | 500 loaded, 120 cards ✅ |
-| VLM visual confirm | All 3 player buttons visible ✅ |
+- ✅ TV channels: 757 loaded, 120 cards
+- ✅ Radio: 500 stations
+- ✅ News: 8 category chips
+- ✅ Books: load via Gutendex
+- ✅ Player modal: VLC button visible
+- ✅ Today panel: 5 cards (weather, quote, word-of-day, on-this-day, holidays)
+- ✅ Dictionary lookup: works (tested "serendipity")
+- ✅ Space panel: NASA APOD + ISS + 12 astronauts
+- ✅ Marketstack fully removed
+- ✅ No JS errors

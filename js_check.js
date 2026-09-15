@@ -247,6 +247,8 @@ function setMode(m){
  if(m==='news'&&!NEWS.loaded)nShow(NEWS.cat);
  if(m==='podcasts'&&!POD.loaded)podShow();
  if(m==='books'&&!BK.init)bInit();
+ if(m==='today'&&!TODAY.loaded)todayLoad();
+ if(m==='space'&&!SPACE.loaded)spaceLoad();
  if(m==='tv'&&S.pl!=='in')load('in');
  if(m==='radio'&&S.pl!=='rin')load('rin');
 }
@@ -263,7 +265,9 @@ var ROUTES={
  'radio':function(){setMode('radio');load('rin')},
  'news':function(){setMode('news')},
  'podcasts':function(){setMode('podcasts')},
- 'books':function(){setMode('books')}
+ 'books':function(){setMode('books')},
+ 'today':function(){setMode('today')},
+ 'space':function(){setMode('space')}
 };
 function routeChange(hash){
  var route=(hash||window.location.hash.slice(1)||'home').toLowerCase();
@@ -1213,6 +1217,165 @@ $('bvtheme').onclick=function(){
   T[(T.indexOf(cur)+1)%T.length]);
  localStorage.setItem('srt-bvtheme',
   $('bookview').getAttribute('data-bv'))};
+
+/* ===== TODAY PANEL (weather + quote + word-of-day + on-this-day + holidays) ===== */
+var TODAY={loaded:false};
+function todayLoad(){
+ var grid=$('todayGrid');
+ if(!grid)return;
+ grid.innerHTML='<div class="pempty">Loading today\'s briefing...</div>';
+ fetch('/api/today')
+ .then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);return r.json()})
+ .then(function(d){
+  TODAY.loaded=true;
+  var h='';
+  // Weather
+  if(d.weather&&!d.weather.error){
+   var w=d.weather;
+   h+='<div class="today-card"><h4>🌤️ Weather</h4>'+
+    '<div class="big-num">'+(w.temp!=null?w.temp:'—')+'°C</div>'+
+    '<div class="sub"><b>'+esc(w.condition||'')+'</b></div>'+
+    '<div class="sub">Humidity: '+(w.humidity!=null?w.humidity:'—')+'%</div>'+
+    '<div class="sub">Wind: '+(w.wind!=null?w.wind:'—')+' km/h</div>'+
+    (w.timezone?'<div class="sub">TZ: '+esc(w.timezone)+'</div>':'')+
+    '</div>';
+  }
+  // Quote
+  if(d.quote&&!d.quote.error){
+   var q=d.quote;
+   h+='<div class="today-card"><h4>💭 Daily Quote</h4>'+
+    '<div class="quote-text">"'+esc(q.text||'')+'"</div>'+
+    '<div class="quote-author">— '+esc(q.author||'Unknown')+'</div></div>';
+  }
+  // Word of the Day
+  if(d.wordOfDay&&!d.wordOfDay.error){
+   var wd=d.wordOfDay;
+   h+='<div class="today-card"><h4>📖 Word of the Day</h4>'+
+    '<div class="word">'+esc(wd.word||'')+'</div>'+
+    (wd.phonetic?'<div class="phonetic">'+esc(wd.phonetic)+'</div>':'')+
+    (wd.partOfSpeech?'<div class="sub"><i>'+esc(wd.partOfSpeech)+'</i></div>':'')+
+    '<div class="word-def">'+esc(wd.definition||'')+'</div>'+
+    (wd.example?'<div class="word-example">"'+esc(wd.example)+'"</div>':'')+
+    (wd.audio?'<button class="big blue" style="margin-top:10px;padding:8px 16px" onclick="new Audio(\''+esc(wd.audio)+'\').play()">▶ Pronounce</button>':'')+
+    '</div>';
+  }
+  // On this day
+  if(d.onThisDay&&!d.onThisDay.error&&Array.isArray(d.onThisDay)){
+   var evs=d.onThisDay;
+   h+='<div class="today-card"><h4>📅 On This Day</h4><ul>';
+   for(var i=0;i<evs.length;i++){
+    h+='<li><b>'+evs[i].year+'</b> — '+esc(evs[i].text||'')+'</li>';
+   }
+   h+='</ul></div>';
+  }
+  // Holidays
+  if(d.holidays&&!d.holidays.error&&Array.isArray(d.holidays)){
+   var hols=d.holidays;
+   h+='<div class="today-card"><h4>🎉 Upcoming Holidays</h4><ul>';
+   for(var j=0;j<hols.length;j++){
+    h+='<li><b>'+esc(hols[j].date)+'</b> — '+esc(hols[j].name||'')+'</li>';
+   }
+   h+='</ul></div>';
+  }
+  grid.innerHTML=h||'<div class="pempty">No data available right now.</div>';
+ })
+ .catch(function(){
+  grid.innerHTML='<div class="pempty">Could not load today\'s briefing.<br>'+
+   '<button class="big" onclick="todayLoad()">Retry</button></div>';
+ });
+}
+window.todayLoad=todayLoad;
+if($('todayRefresh'))$('todayRefresh').onclick=function(){TODAY.loaded=false;todayLoad()};
+
+/* ===== DICTIONARY LOOKUP (freeDictionaryAPI) ===== */
+function dictSearch(){
+ var word=($('dictInput')?$('dictInput').value:'').trim();
+ if(!word){toast('Enter a word first','bad');return}
+ var result=$('dictResult');
+ if(result)result.innerHTML='<div class="pempty">Looking up "'+esc(word)+'"...</div>';
+ fetch('/api/dictionary?w='+encodeURIComponent(word))
+ .then(function(r){return r.json()})
+ .then(function(d){
+  if(d.error){
+   if(result)result.innerHTML='<div class="pempty">Word not found. Try another spelling.</div>';
+   return;
+  }
+  var h='<div class="dict-result-card">'+
+   '<div class="word">'+esc(d.word||word)+'</div>'+
+   (d.phonetic?'<div class="phonetic">'+esc(d.phonetic)+'</div>':'')+
+   (d.partOfSpeech?'<div class="sub"><i>'+esc(d.partOfSpeech)+'</i></div>':'')+
+   '<div class="meaning"><b>Definition:</b> '+esc(d.definition||'')+'</div>';
+  if(d.example)h+='<div class="meaning"><b>Example:</b> "'+esc(d.example)+'"</div>';
+  if(d.all_meanings&&d.all_meanings.length>1){
+   h+='<div class="meaning"><b>Other meanings:</b><ul>';
+   for(var i=1;i<d.all_meanings.length;i++){
+    var m=d.all_meanings[i];
+    h+='<li><i>'+esc(m.part)+'</i>: '+esc((m.definitions||[]).join('; '))+'</li>';
+   }
+   h+='</ul></div>';
+  }
+  if(d.audio)h+='<button class="big blue" style="margin-top:10px;padding:8px 16px" onclick="new Audio(\''+esc(d.audio)+'\').play()">▶ Pronounce</button>';
+  h+='</div>';
+  if(result)result.innerHTML=h;
+ })
+ .catch(function(){
+  if(result)result.innerHTML='<div class="pempty">Could not look up word. Try again.</div>';
+ });
+}
+window.dictSearch=dictSearch;
+if($('dictSearch'))$('dictSearch').onclick=dictSearch;
+if($('dictInput'))$('dictInput').addEventListener('keydown',function(e){
+ if(e.key==='Enter')dictSearch()});
+
+/* ===== SPACE PANEL (NASA APOD + ISS + astronauts) ===== */
+var SPACE={loaded:false};
+function spaceLoad(){
+ var grid=$('spaceGrid');
+ if(!grid)return;
+ grid.innerHTML='<div class="pempty">Loading space data...</div>';
+ fetch('/api/space')
+ .then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);return r.json()})
+ .then(function(d){
+  SPACE.loaded=true;
+  var h='';
+  // NASA APOD
+  if(d.apod&&!d.apod.error){
+   var a=d.apod;
+   h+='<div class="space-card"><h4>🌌 NASA Picture of the Day</h4>'+
+    '<div class="sub"><b>'+esc(a.title||'')+'</b> ('+esc(a.date||'')+')</div>';
+   if(a.media_type==='image'&&a.url){
+    h+='<img class="apod" src="'+esc(a.url)+'" alt="'+esc(a.title||'APOD')+'" loading="lazy">';
+   }
+   if(a.explanation){
+    h+='<div class="sub">'+esc(a.explanation)+'</div>';
+   }
+   h+='</div>';
+  }
+  // ISS position
+  if(d.iss&&!d.iss.error){
+   var iss=d.iss;
+   h+='<div class="space-card"><h4>🛰️ ISS Live Position</h4>'+
+    '<div class="sub">The International Space Station is currently at:</div>'+
+    '<div class="iss-coords">Lat: '+esc(iss.lat||'—')+'  Lng: '+esc(iss.lng||'—')+'</div>'+
+    '<div class="sub" style="margin-top:10px">Updates every time you open this panel.</div></div>';
+  }
+  // People in space
+  if(d.people&&!d.people.error){
+   var p=d.people;
+   h+='<div class="space-card"><h4>👨‍🚀 Astronauts in Space</h4>'+
+    '<div class="big-num">'+(p.count||0)+'</div>'+
+    '<div class="sub">people currently in space:</div>'+
+    '<div class="astronaut-list">'+(p.names||[]).map(function(n){return '• '+esc(n)}).join('<br>')+'</div></div>';
+  }
+  grid.innerHTML=h||'<div class="pempty">No space data available right now.</div>';
+ })
+ .catch(function(){
+  grid.innerHTML='<div class="pempty">Could not load space data.<br>'+
+   '<button class="big" onclick="spaceLoad()">Retry</button></div>';
+ });
+}
+window.spaceLoad=spaceLoad;
+if($('spaceRefresh'))$('spaceRefresh').onclick=function(){SPACE.loaded=false;spaceLoad()};
 
 /* ===== CHECKS / WELCOME ===== */
 function runChecks(){
