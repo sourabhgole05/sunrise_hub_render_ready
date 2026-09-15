@@ -418,9 +418,12 @@ function pbShow(it){
  document.body.classList.add('playing');PB.on=true}
 function radioStop(msg){
  AU.pause();try{AU.removeAttribute('src');AU.load()}catch(e){}
- AU.onplaying=AU.onpause=AU.onended=AU.onerror=null;
+ AU.onplaying=AU.onpause=AU.onended=AU.onError=null;
  clearInterval(PB.wd);clearTimeout(PB.timer);clearInterval(PB.bt);
  document.body.classList.remove('playing');PB.on=false;PB.cur=null;PB.tries=0;
+ // Clear the inline display set by pbShow() so the CSS rule
+ // body.playing #pbar{display:flex} no longer keeps it visible.
+ $('pbar').style.display='';
  $('pbplay').innerHTML='\u25B6';$('pbstate').textContent='Stopped';
  $('pbslp').value='0';
  if(msg)toast(msg,'bad')}
@@ -765,10 +768,11 @@ function openPlayer(it,u){
  $('playerhint').textContent=/Android|iPhone|iPad|iPod/i.test(navigator.userAgent)
   ?'Playing in this browser. If the stream struggles, use "Open in VLC" below.'
   :'Choose a playback option.';
- // Always show VLC button on mobile so users have it as a fallback option
- // (some streams won't play in-browser and need VLC).
- var isMobile=/Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
- $('playervlc').style.display=(isMobile||vlcLink(u)||!IS_CLOUD)?'':'none';
+ // Always show VLC button so users have it as a fallback option.
+ // Some streams don't play in-browser (geo-blocked, codec, CORS) and VLC
+ // is the reliable fallback. On mobile, vlcLink() returns an intent URL;
+ // on desktop cloud, the /play endpoint tries to launch local VLC.
+ $('playervlc').style.display='';
  $('playerplay').style.display=/^https?:/i.test(u)?'':'none';
  $('playerexternal').style.display=/^https?:/i.test(u)?'':'none';
  showModal('playermodal',true);

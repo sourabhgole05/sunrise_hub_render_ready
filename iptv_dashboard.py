@@ -631,8 +631,12 @@ def fetch_podcasts():
 def gutendex(params):
     q = urlencode(params, doseq=True)
     req = urllib.request.Request("https://gutendex.com/books?" + q,
-                                 headers={"User-Agent": "Mozilla/5.0"})
-    with urllib.request.urlopen(req, timeout=12) as r:
+                                 headers={"User-Agent":
+                                          "Mozilla/5.0 (X11; Linux x86_64) "
+                                          "AppleWebKit/537.36 (KHTML, like Gecko) "
+                                          "Chrome/120.0 Safari/537.36",
+                                          "Accept": "application/json"})
+    with urllib.request.urlopen(req, timeout=25) as r:
         return json.loads(r.read().decode("utf-8", errors="replace"))
 
 def archive_books(query, language, page):
@@ -1820,6 +1824,9 @@ function radioStop(msg){
  AU.onplaying=AU.onpause=AU.onended=AU.onerror=null;
  clearInterval(PB.wd);clearTimeout(PB.timer);clearInterval(PB.bt);
  document.body.classList.remove('playing');PB.on=false;PB.cur=null;PB.tries=0;
+ // Clear the inline display set by pbShow() so the CSS rule
+ // body.playing #pbar{display:flex} no longer keeps it visible.
+ $('pbar').style.display='';
  $('pbplay').innerHTML='\\u25B6';$('pbstate').textContent='Stopped';
  $('pbslp').value='0';
  if(msg)toast(msg,'bad')}
@@ -2193,10 +2200,11 @@ function openPlayer(it,u){
  $('playerhint').textContent=/Android|iPhone|iPad|iPod/i.test(navigator.userAgent)
   ?'Playing in this browser. If the stream struggles, use "Open in VLC" below.'
   :'Choose a playback option.';
- // Always show VLC button on mobile so users have it as a fallback option
- // (some streams won't play in-browser and need VLC).
- var isMobile=/Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
- $('playervlc').style.display=(isMobile||vlcLink(u)||!IS_CLOUD)?'':'none';
+ // Always show VLC button so users have it as a fallback option.
+ // Some streams don't play in-browser (geo-blocked, codec, CORS) and VLC
+ // is the reliable fallback. On mobile, vlcLink() returns an intent URL;
+ // on desktop cloud, the /play endpoint tries to launch local VLC.
+ $('playervlc').style.display='';
  $('playerplay').style.display=/^https?:/i.test(u)?'':'none';
  $('playerexternal').style.display=/^https?:/i.test(u)?'':'none';
  showModal('playermodal',true);
@@ -3009,14 +3017,27 @@ class Handler(BaseHTTPRequestHandler):
                 page = min(50, max(1, int(qs.get("page", ["1"])[0] or 1)))
             except Exception:
                 page = 1
-            params = {"languages": lang.split(","), "page": page}
-            if qstr: params["search"] = qstr
-            else:    params["sort"] = "popular"
+            # Gutendex's `languages` filter is often slow / 503s. Try with
+            # languages first, but fall back to popular-only if it times out.
+            j = None
             try:
+                params = {"page": page, "sort": "popular"}
+                if qstr:
+                    params = {"page": page, "search": qstr}
+                elif lang and lang != "en,hi":
+                    params["languages"] = lang
                 j = gutendex(params)
-                if not (j or {}).get("results") and lang == "en,hi":
-                    j = gutendex({"page": page, "sort": "popular"})
             except Exception:
+                j = None
+            # If the language-filtered call failed or returned nothing, retry
+            # without language filter (just popular sort).
+            if not (j or {}).get("results"):
+                try:
+                    j = gutendex({"page": page, "sort": "popular"})
+                except Exception:
+                    j = None
+            # Last-resort fallback: hardcoded books.
+            if not (j or {}).get("results"):
                 j = fallback_books(lang)
             items = []
             for g in j.get("results", []):
