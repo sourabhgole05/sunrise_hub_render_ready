@@ -246,7 +246,6 @@ function setMode(m){
  $('grid').style.display=med?'grid':'none';
  if(m==='news'&&!NEWS.loaded)nShow(NEWS.cat);
  if(m==='podcasts'&&!POD.loaded)podShow();
- if(m==='markets'){mkPaint();mkStart()}else mkStop();
  if(m==='books'&&!BK.init)bInit();
  if(m==='tv'&&S.pl!=='in')load('in');
  if(m==='radio'&&S.pl!=='rin')load('rin');
@@ -264,7 +263,6 @@ var ROUTES={
  'radio':function(){setMode('radio');load('rin')},
  'news':function(){setMode('news')},
  'podcasts':function(){setMode('podcasts')},
- 'markets':function(){setMode('markets')},
  'books':function(){setMode('books')}
 };
 function routeChange(hash){
@@ -309,11 +307,11 @@ function showHomeDashboard(){
  var f=$u('favorites',{});
  var favCount=0;for(var cat in f)favCount+=f[cat].length;
  h+='<section class="spa-section"><h3>Favorites ('+favCount+')</h3><div class="spa-cards">';
- if(!favCount){h+='<div class="pempty">Star your favorite TV, radio, podcasts, books and markets to see them here.</div>'}
+ if(!favCount){h+='<div class="pempty">Star your favorite TV, radio, podcasts and books to see them here.</div>'}
  else{var shown=0;for(var cat in f){f[cat].slice(0,3).forEach(function(a){if(shown>=6)return;h+='<div class="spa-card" onclick="navigateTo(\''+(cat||'tv')+'\')"><div class="spa-icon">⭐</div><div class="spa-title">'+esc(a.t||a.n||'')+'</div><div class="spa-sub">'+esc(cat)+'</div></div>';shown++})}}
  h+='</div></section>';
  // Today's useful content
- h+='<section class="spa-section"><h3>Today\'s Useful Content</h3><div class="spa-cards"><div class="spa-card" onclick="navigateTo(\'news\')"><div class="spa-icon">📰</div><div class="spa-title">Latest news headlines</div><div class="spa-sub">60+ stories from top sources</div></div><div class="spa-card" onclick="navigateTo(\'markets\')"><div class="spa-icon">📈</div><div class="spa-title">Market snapshot</div><div class="spa-sub">NIFTY • SENSEX • US markets</div></div><div class="spa-card" onclick="navigateTo(\'books\')"><div class="spa-icon">📚</div><div class="spa-title">Free books</div><div class="spa-sub">70,000+ public domain titles</div></div></div></section>';
+ h+='<section class="spa-section"><h3>Today\'s Useful Content</h3><div class="spa-cards"><div class="spa-card" onclick="navigateTo(\'news\')"><div class="spa-icon">📰</div><div class="spa-title">Latest news headlines</div><div class="spa-sub">60+ stories from top sources</div></div><div class="spa-card" onclick="navigateTo(\'books\')"><div class="spa-icon">📚</div><div class="spa-title">Free books</div><div class="spa-sub">70,000+ public domain titles</div></div></div></section>';
  $('grid').innerHTML=h;
  $('grid').style.display='grid';
  document.querySelector('.row2').style.display='none';
@@ -323,7 +321,7 @@ function showHomeDashboard(){
 function showFavoritesPage(){
  var f=$u('favorites',{});
  var h='<div class="spa-home"><h2>⭐ Favorites</h2><div class="spa-sections">';
- var cats=['tv','radio','news','podcasts','books','markets'];
+ var cats=['tv','radio','news','podcasts','books'];
  cats.forEach(function(cat){
   var items=f[cat]||[];
   if(!items.length)return;
@@ -367,7 +365,7 @@ function showGlobalSearch(){
  var out='<div class="spa-home"><h2>🔍 Search Everything</h2><div class="spa-sections">';
  if(!q){out+='<div class="pempty">Type in the search bar above to search TV, Radio, News, Podcasts, Books and Markets.</div>'}
  else{
-  var cats=['tv','radio','news','podcasts','books','markets'];
+  var cats=['tv','radio','news','podcasts','books'];
   var found=0;
   cats.forEach(function(cat){
    var items=[];
@@ -376,7 +374,6 @@ function showGlobalSearch(){
    else if(cat==='news')items=(NEWS.items||[]);
    else if(cat==='podcasts')items=(POD.items||[]);
    else if(cat==='books')items=(BK.items||[]);
-   else if(cat==='markets')items=(MKT.rows||[]);
    var matches=items.filter(function(x){return((x.t||x.n||x.s||x.sym||'').toLowerCase().indexOf(q)>-1)}).slice(0,10);
    if(matches.length){
     found++;
@@ -895,7 +892,7 @@ $('glist').onclick=function(e){var r=e.target.closest('.grow');
 /* ================= NEWS PANEL ================= */
 var NEWS={cat:'top',items:[],loaded:false};
 var NCATS=[['top','Top'],['india','India'],['business','Business'],
- ['markets','Markets'],['tech','Tech'],['sports','Sports'],
+ ['finance','Finance'],['tech','Tech'],['sports','Sports'],
  ['world','World'],
  ['hindi','&#2361;&#2367;&#2344;&#2381;&#2342;&#2368;']];
 function nChips(){var h='';
@@ -1071,197 +1068,6 @@ function podShow(){
  $('podq').addEventListener('input',podPaint);
  $('podrefresh').onclick=function(){POD.loaded=false;podShow()};
 
-/* ================= MARKETS PANEL ================= */
-var MKT={timer:null,rows:null,watch:[],loading:false,request:null};
-try{MKT.watch=JSON.parse(localStorage.getItem('srt-watch')||'null')||[]}
-catch(e){}
-if(!MKT.watch.length)MKT.watch=['RELIANCE.NS','TCS.NS','INFY.NS',
- 'HDFCBANK.NS','AAPL','MSFT','NVDA'];
-var IDX_IN=[['^NSEI','NIFTY 50'],['^BSESN','SENSEX'],
- ['^NSEBANK','BANK NIFTY'],['INR=X','USD/INR']];
-var IDX_US=[['^DJI','DOW JONES'],['^GSPC','S&P 500'],['^IXIC','NASDAQ']];
-function mkSyms(){return IDX_IN.concat(IDX_US).concat(
- MKT.watch.map(function(s){return[s,s]}))}
-function money(n,cur){
- if(n==null||isNaN(n))return'-';
- var s=(Math.abs(n)>=1000)?
-  n.toLocaleString('en-IN',{maximumFractionDigits:2}):n.toFixed(2);
- return(cur==='INR'?'\u20B9':cur==='USD'?'$':'')+s}
-function chgHtml(pr,pv){
- if(pr==null||!pv)return'<span class="mchg">-</span>';
- var d=pr-pv,p=d/pv*100,up=d>=0;
- return'<span class="mchg '+(up?'up':'down')+'">'+
-  (up?'\u25B2 ':'\u25BC ')+Math.abs(p).toFixed(2)+'%</span>'}
-function sparkV(vals,w,h){
- if(!vals||vals.length<2)return'';
- var mn=Math.min.apply(null,vals),mx=Math.max.apply(null,vals);
- var rng=(mx-mn)||1,col=vals[vals.length-1]>=vals[0]?'#16a34a':'#dc2626';
- var pts=[];
- for(var i=0;i<vals.length;i++){
-  pts.push(((i/(vals.length-1))*w).toFixed(1)+','+
-   (h-3-((vals[i]-mn)/rng)*(h-6)).toFixed(1))}
- return'<svg width="'+w+'" height="'+h+'"><polyline fill="none" stroke="'+
-  col+'" stroke-width="2" points="'+pts.join(' ')+'"/></svg>'}
- function candleV(rows,w,h){
- if(!rows||rows.length<2)return'';
- rows=rows.slice(-80);var lo=Math.min.apply(null,rows.map(function(x){return x.l})),
-  hi=Math.max.apply(null,rows.map(function(x){return x.h})),rng=(hi-lo)||1,step=w/rows.length;
- var s='<svg width="'+w+'" height="'+h+'" role="img" aria-label="candlestick chart">';
- rows.forEach(function(x,i){var up=x.c>=x.o,col=up?'#16a34a':'#dc2626',
-   y=function(v){return h-4-((v-lo)/rng)*(h-8)},x0=i*step+step/2,
-   top=y(Math.max(x.o,x.c)),bot=y(Math.min(x.o,x.c));
-  s+='<line x1="'+x0.toFixed(1)+'" y1="'+y(x.h).toFixed(1)+'" x2="'+x0.toFixed(1)+'" y2="'+y(x.l).toFixed(1)+'" stroke="'+col+'"/>'+
-   '<rect x="'+(i*step+1).toFixed(1)+'" y="'+top.toFixed(1)+'" width="'+Math.max(2,step-2).toFixed(1)+'" height="'+Math.max(1,bot-top).toFixed(1)+'" fill="'+col+'"/>'});
- return s+'</svg>'}
-function barV(vals,w,h){
- if(!vals||vals.length<2)return'';
- var mn=Math.min.apply(null,vals),mx=Math.max.apply(null,vals),rng=(mx-mn)||1;
- var step=w/vals.length,b='';
- for(var i=0;i<vals.length;i++){
-  var bh=Math.max(2,((vals[i]-mn)/rng)*(h-8));
-  b+='<rect x="'+(i*step).toFixed(1)+'" y="'+(h-bh).toFixed(1)+
-  '" width="'+Math.max(1,step-1).toFixed(1)+'" height="'+bh.toFixed(1)+
-  '" fill="'+(vals[i]>=vals[0]?'#16a34a':'#dc2626')+'"/>'}
- return'<svg width="'+w+'" height="'+h+'">'+b+'</svg>'}
-function mkRow(q,label,canRm){
- var live=q.state==='REGULAR'||q.state==='OPEN';
- var fav=PS.isFavorite('markets',q)?'⭐':'☆';
- return'<div class="mkrow" data-sym="'+esc(q.sym)+'" onclick="PS.addHistory({t:\''+(label||q.name||q.sym)+'\',u:\'/api/quote?sym='+esc(q.sym)+'\',tp:\'markets\'},\'markets\');PS.saveContinue({t:\''+(label||q.name||q.sym)+'\',u:\'/api/quote?sym='+esc(q.sym)+'\',tp:\'markets\'},\'markets\',0)">'+
-  '<div class="mkid"><b>'+esc(label||q.name||q.sym)+'</b>'+
-  '<span class="mkst '+(live?'live':'off')+'">'+(live?'LIVE':'CLOSED')+
-  '</span>'+fav+(canRm?'<button class="rm" data-sym="'+esc(q.sym)+
-  '" title="Remove">\u2715</button>':'')+'</div>'+
-  '<div class="mknum"><span class="mkp">'+money(q.price,q.cur)+'</span>'+
-  chgHtml(q.price,q.prev)+'<small>O '+money(q.open,q.cur)+
-  ' H '+money(q.high,q.cur)+' L '+money(q.low,q.cur)+
-  ' C '+money(q.close,q.cur)+'</small></div>'+
-  '<div class="mksk">'+sparkV(q.cl40,120,36)+'</div></div>'}
-function mkPaint(){
- if(!MKT.rows)$('mkwrap').innerHTML=
-  '<div class="pempty">Loading quotes&#8230;</div>';
- else mkRender()}
-function mkRender(){
- var by={};(MKT.rows||[]).forEach(function(r){by[r.sym]=r});
- function sec(t,list,rm){
-  var h='<h4 class="mksec">'+t+'</h4>';
-  list.forEach(function(p){var q=by[p[0]];
-   if(!q){h+='<div class="mkrow na"><div class="mkid"><b>'+esc(p[1])+
-    '</b></div><span>unavailable</span></div>';return}
-   h+=mkRow(q,p[1],rm)});
-  return h}
- $('mkwrap').innerHTML=
-  sec('&#127470;&#127475; INDIA',IDX_IN,false)+
-  sec('&#127482;&#127480; US MARKETS',IDX_US,false)+
-  '<h4 class="mksec">&#9733; MY WATCHLIST'+
-  '<button class="mini" id="mkadd">+ add symbol</button></h4>'+
-  (MKT.watch.length?
-   MKT.watch.map(function(s){var q=by[s];
-    return q?mkRow(q,null,true):
-     '<div class="mkrow na"><div class="mkid"><b>'+esc(s)+
-     '</b></div><span>unavailable</span></div>'}).join(''):
-   '<div class="pempty">Tap + add to track stocks</div>');
- var ad=$('mkadd');if(ad)ad.onclick=mkAdd}
-function saveWatch(){localStorage.setItem('srt-watch',
- JSON.stringify(MKT.watch))}
-function mkRefresh(){
- if(MKT.loading)return;
- MKT.loading=true;
- MKT.request=fetch('/api/markets?symbols='+
-  encodeURIComponent(mkSyms().map(function(p){return p[0]}).join(',')))
- .then(function(r){return r.json()})
- .then(function(j){MKT.rows=j.quotes||[];mkRender()})
- .catch(function(err){if(err&&err.name==='AbortError')return;
- $('mkwrap').innerHTML=
-  '<div class="pempty">Quotes unavailable right now.<br>'+
-  '<button class="big" onclick="mkRefresh()">Retry</button></div>'})
- .then(function(){MKT.loading=false;MKT.request=null})}
-window.mkRefresh=mkRefresh;
-function mkStart(){mkRefresh();clearInterval(MKT.timer);
- MKT.timer=setInterval(function(){if(MODE==='markets')mkRefresh()},60000)}
-function mkStop(){clearInterval(MKT.timer)}
-function mkAdd(){
- var s=(prompt('Stock symbol:\\nIndia: TATAMOTORS.NS, WIPRO.NS, SBIN.NS\\nUS: GOOG, AMZN, TSLA')||'').trim().toUpperCase();
- if(!s)return;
- if(!/^[A-Z0-9^.=-]{1,15}$/.test(s)){toast('Invalid symbol','bad');return}
- if(MKT.watch.indexOf(s)<0){MKT.watch.push(s);saveWatch();mkRefresh()}}
-function mkRemove(sym){
- MKT.watch=MKT.watch.filter(function(x){return x!==sym});
- saveWatch();mkRefresh()}
-$('mkwrap').onclick=function(e){
- if(e.target.id==='mkadd')return mkAdd();
- var rm=e.target.closest('.rm');
- if(rm)return mkRemove(rm.dataset.sym);
- var r=e.target.closest('.mkrow');
- if(r&&!r.classList.contains('na'))openChart(r.dataset.sym)};
-/* market news sidebar */
-function mkNews(){
- fetch('/api/news?cat=markets').then(function(r){return r.json()})
- .then(function(j){
-  var it=(j.items||[]).slice(0,6),h='';
-  for(var i=0;i<it.length;i++){
-   h+='<article class="ni" data-mkl="'+esc(it[i].l)+'"><div class="nitxt">'+
-    '<h3>'+esc(it[i].t)+'</h3><span class="nimeta">'+esc(it[i].s)+
-    (it[i].pub?' &middot; '+agoT(it[i].pub):'')+'</span></div></article>'}
-  $('mknews').innerHTML=h||
-   '<div class="pempty">No market news loaded.</div>';
-  var as=$('mknews').querySelectorAll('.ni');
-  for(var k=0;k<as.length;k++)as[k].onclick=function(){
-   var l=this.dataset.mkl;
-   if(/^https?:/.test(l))window.open(l,'_blank','noopener')}})
- .catch(function(){$('mknews').innerHTML=
-  '<div class="pempty">news unavailable</div>'})}
-/* chart modal */
-var CR={'1D':['1d','5m'],'5D':['5d','15m'],'1M':['1mo','60m'],
- '6M':['6mo','1d'],'1Y':['1y','1d']};
-var CS={sym:null,range:'1M',type:'line'};
-function openChart(sym){
- CS.sym=sym;CS.range='1M';
- $('chartsym').textContent=sym;
- showModal('chartmodal',true);loadChart()}
-window.openChart=openChart;
-function loadChart(){
- var rr=CR[CS.range],ph='';
- for(var k in CR)ph+='<button data-r="'+k+'" class="'+
-  (k===CS.range?'active':'')+'">'+k+'</button>';
- $('chartpills').innerHTML=ph;
- var pb=$('chartpills').querySelectorAll('button');
- for(var i=0;i<pb.length;i++)pb[i].onclick=function(){
-  CS.range=this.dataset.r;loadChart()};
- document.querySelectorAll('[data-ct]').forEach(function(b){
-  b.className='mini '+(b.dataset.ct===CS.type?'active':'');
-  b.onclick=function(){CS.type=this.dataset.ct;loadChart()}});
- $('bigchart').innerHTML='<div class="pempty">Loading&#8230;</div>';
- $('chkstats').textContent='';
- fetch('/api/mchart?sym='+encodeURIComponent(CS.sym)+
-  '&range='+rr[0]+'&interval='+rr[1])
- .then(function(r){return r.json()})
- .then(function(j){
-  var cl=j.cl||[];
-  if(cl.length<2){$('bigchart').innerHTML=
-   '<div class="pempty">No chart data</div>';return}
-  $('bigchart').innerHTML=CS.type==='bar'?barV(cl,560,220):
-   (CS.type==='candle'?candleV(j.candles,560,220):sparkV(cl,560,220));
-  var lo=Math.min.apply(null,cl),hi=Math.max.apply(null,cl);
-  $('chkstats').innerHTML='<b>'+money(j.price,j.cur)+'</b>'+
-   chgHtml(j.price,j.prev)+'<span>low '+money(lo,j.cur)+'</span>'+
-   '<span>high '+money(hi,j.cur)+'</span>'+
-  '<span>open '+money(j.open,j.cur)+'</span><span>close '+
-  money(j.close,j.cur)+'</span>'+
-  (j.state?'<span>'+esc(j.state)+'</span>':'')+
-  (j.name?'<span>'+esc(j.name)+'</span>':'')+
-  (j.exchangeName?'<span>'+esc(j.exchangeName)+'</span>':'');
-  fetch('/api/fundamentals?sym='+encodeURIComponent(CS.sym))
-   .then(function(r){return r.json()}).then(function(f){
-    if(f.error)return;
-    $('chkstats').innerHTML+='<span>PE '+(f.pe==null?'-':f.pe.toFixed?
-     f.pe.toFixed(2):f.pe)+'</span><span>mcap '+money(f.marketCap,j.cur)+
-     '</span><span>'+esc(f.sector||'')+'</span><span>'+
-     esc(f.industry||'')+'</span>';
-   }).catch(function(){});
-  })
- .catch(function(){$('bigchart').innerHTML=
-  '<div class="pempty">Failed to load</div>'})}
-
 /* ================= BOOKS PANEL ================= */
 var BK={init:false,q:'',lang:'en,hi',page:1,hasNext:false,hasPrev:false,
  items:[],cur:null,pages:1,pg:0,total:0,
@@ -1419,7 +1225,6 @@ function runChecks(){
    row('TV+Radio DB',j.radio?'pass':'warn',
     j.radio?'reachable':'blocked?')+
    row('News RSS',j.news?'pass':'warn',j.news?'OK':'blocked?')+
-   row('Markets API',j.yax?'pass':'warn',j.yax?'OK':'blocked?')+
    row('Books API',j.books?'pass':'warn',j.books?'OK':'blocked?')})
  .catch(function(){$('wbchecks').innerHTML=
   '<p>Could not run checks.</p>'})}
@@ -1503,7 +1308,7 @@ document.addEventListener('keydown',function(e){
  if(e.key==='/'&&!ISMOBILE&&document.activeElement!==$('q')&&
   MODE==='media'){e.preventDefault();$('q').focus()}
  if(e.key==='Escape'){
-  ['mobpanel','guidepanel','setpanel','welcome','readerview','chartmodal','playermodal']
+  ['guidepanel','setpanel','welcome','readerview','chartmodal','playermodal']
    .forEach(function(m){showModal(m,false)});
   if(document.activeElement===$('q')&&MODE==='media'){
    $('q').value='';$('q').dispatchEvent(new Event('input'))}}});
@@ -1524,7 +1329,6 @@ $('okfirst').addEventListener('change',function(){render(true)});
   if(S.liveonly)wrap.classList.add('has-live');else wrap.classList.remove('has-live');
   if(S.liveonly&&!isTV(S.pl)){toast('Live-only needs a TV playlist','')}
   buildChips();render(true)})})();
-$('mob').onclick=function(){showModal('mobpanel',true)};
 $('set').onclick=function(){showModal('setpanel',true)};
 $('cacheclear').onclick=window.clearCache;
 $('cachetop').onclick=function(){if(confirm('Clear downloaded data and stream checks?'))clearCache()};
@@ -1548,8 +1352,6 @@ new IntersectionObserver(function(es){es.forEach(function(e){
 
 (function(){
  if(ISMOBILE||IS_CLOUD){$('quit').style.display='none'}
- if(ISMOBILE){$('mob').style.display='none';
-  if($('setupPhone'))$('setupPhone').style.display='none'}
  if(IS_CLOUD){$('playall').style.display='none';$('pbvlc').style.display='none'}
  var h='';
  for(var k in PL)h+='<a class="big '+(PL[k].t==='radio'?'cy':'blue')+

@@ -28,10 +28,6 @@ try:
 except ImportError:
     internetarchive = None
 try:
-    import yfinance
-except ImportError:
-    yfinance = None
-try:
     import feedparser
 except ImportError:
     feedparser = None
@@ -482,7 +478,7 @@ NEWS_FEEDS = {
                   "https://www.thehindu.com/business/feeder/default.rss"),
                  ("Google News",
                   GN + "/headlines/section/topic/BUSINESS?hl=en-IN&gl=IN&ceid=IN:en")],
-    "markets":  [("ET Markets",
+    "finance":  [("ET Markets",
                   "https://economictimes.indiatimes.com/markets/rssfeeds/1977021501.cms"),
                  ("Moneycontrol",
                   "https://www.moneycontrol.com/rss/business.xml")],
@@ -630,101 +626,6 @@ def fetch_podcasts():
     preferred.extend(item for item in out if norm(item["t"])[:70] not in preferred_keys)
     return preferred[:100]
 
-def fetch_market_news_feed():
-    url = "https://feeds.finance.yahoo.com/rss/2.0/headline?s=%5ENSEI&region=IN&lang=en-IN"
-    if feedparser is not None:
-        parsed = feedparser.parse(url)
-        return [{"t": x.get("title", ""), "l": x.get("link", ""),
-                 "b": H.unescape(re.sub(r"<[^>]+>", " ", x.get("summary", ""))).strip(),
-                 "pub": _parse_pub(x.get("published", "")), "s": "Yahoo Finance"}
-                for x in parsed.entries[:30] if x.get("title")]
-    out = []
-    _feed_items("Yahoo Finance", url, out)
-    return out[:30]
-
-# ---------------- MARKETS (Yahoo Finance public chart API) ----------------
-YF_HOSTS = ("query1", "query2")
-
-def yf_chart(sym, range_="1d", interval="5m"):
-    last = None
-    for h in YF_HOSTS:
-        try:
-            u = ("https://%s.finance.yahoo.com/v8/finance/chart/%s"
-                 "?range=%s&interval=%s"
-                 % (h, quote(sym, safe=""), range_, interval))
-            req = urllib.request.Request(u, headers={"User-Agent": "Mozilla/5.0"})
-            with urllib.request.urlopen(req, timeout=8) as r:
-                j = json.loads(r.read().decode("utf-8", errors="replace"))
-            res = (j.get("chart") or {}).get("result") or []
-            if not res: raise RuntimeError("empty")
-            res = res[0]
-            meta = res.get("meta") or {}
-            q = ((res.get("indicators") or {}).get("quote") or [{}])[0]
-            cl = [c for c in (q.get("close") or []) if c is not None]  # QA fix #4
-            latest = (res.get("indicators") or {}).get("quote", [{}])[0]
-            candles = [{"t": t, "o": o, "h": h, "l": lo, "c": close}
-                       for t, o, h, lo, close in zip(
-                           res.get("timestamp") or [],
-                           latest.get("open") or [],
-                           latest.get("high") or [],
-                           latest.get("low") or [],
-                           latest.get("close") or [])
-                       if None not in (t, o, h, lo, close)][-400:]
-            last_candle = candles[-1] if candles else {}
-            return {"sym": sym,
-                    "name": meta.get("shortName") or meta.get("longName") or sym,
-                    "price": meta.get("regularMarketPrice"),
-                    "prev": meta.get("previousClose")
-                            or meta.get("chartPreviousClose"),
-                    "open": meta.get("regularMarketOpen") or last_candle.get("o"),
-                    "high": meta.get("regularMarketDayHigh") or last_candle.get("h"),
-                    "low": meta.get("regularMarketDayLow") or last_candle.get("l"),
-                    "close": last_candle.get("c") or meta.get("regularMarketPrice"),
-                    "cur": meta.get("currency") or "",
-                    "exchangeName": meta.get("exchangeName") or
-                                    meta.get("fullExchangeName") or "",
-                    "state": meta.get("marketState") or "",
-                    "ts": (res.get("timestamp") or [])[-400:],
-                    "cl": cl[-400:],
-                    "candles": candles}
-        except Exception as e:
-            last = e
-    raise RuntimeError("yahoo failed %s (%s)" % (sym, last))
-
-def yf_fundamentals(sym):
-    url = ("https://query1.finance.yahoo.com/v10/finance/quoteSummary/%s"
-           "?modules=price,summaryDetail,defaultKeyStatistics,assetProfile"
-           % quote(sym, safe=""))
-    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-    with urllib.request.urlopen(req, timeout=8) as r:
-        data = json.loads(r.read().decode("utf-8", errors="replace"))
-    result = ((data.get("quoteSummary") or {}).get("result") or [{}])[0]
-    price = result.get("price") or {}
-    detail = result.get("summaryDetail") or {}
-    stats = result.get("defaultKeyStatistics") or {}
-    profile = result.get("assetProfile") or {}
-    def raw(obj, key):
-        value = obj.get(key)
-        return value.get("raw") if isinstance(value, dict) else value
-    return {"sym": sym, "name": raw(price, "longName") or raw(price, "shortName") or sym,
-            "pe": raw(detail, "trailingPE") or raw(stats, "trailingEps"),
-            "forwardPe": raw(stats, "forwardPE"),
-            "marketCap": raw(price, "marketCap"),
-            "eps": raw(stats, "trailingEps"),
-            "dividendYield": raw(detail, "dividendYield"),
-            "sector": profile.get("sector") or "",
-            "industry": profile.get("industry") or ""}
-
-def yf_quote_snapshot(sym):
-    if yfinance is None:
-        return yf_chart(sym, "5d", "1d")
-    ticker = yfinance.Ticker(sym)
-    info = ticker.fast_info
-    hist = ticker.history(period="5d", interval="1d", auto_adjust=False)
-    closes = [float(x) for x in hist["Close"].dropna().tolist()]
-    return {"sym": sym, "price": float(info.last_price) if info.last_price else None,
-            "prev": float(info.previous_close) if info.previous_close else None,
-            "trend": closes, "currency": getattr(info, "currency", "") or ""}
 
 # ---------------- BOOKS (Project Gutenberg via Gutendex) ----------------
 def gutendex(params):
@@ -818,22 +719,6 @@ def book_text(bid):
     return txt
 
 # ---------------- misc ----------------
-def qr_datauri(url):
-    try:
-        import qrcode
-        buf = io.BytesIO()
-        qrcode.make(url).save(buf, format="PNG")
-        return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
-    except Exception:
-        return ""
-
-def qr_img_tag(url):
-    src = qr_datauri(url)
-    if src: return ('<img src="%s" width="170" height="170">' % src, "local")
-    return ('<img src="https://api.qrserver.com/v1/create-qr-code/'
-            '?size=170x170&amp;data=%s" width="170" height="170">'
-            % quote(url, safe=""), "web fallback")
-
 def launch(url):
     if not VLC: return False, "VLC not found on PC."
     try:
@@ -904,74 +789,80 @@ def MOBILE_UA(ua): return bool(re.search(r"Android|iPhone|iPad|iPod|Mobile",
 SHELL = """<!doctype html><html><head><meta charset="utf-8">
 <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.17/dist/hls.min.js"></script>
 <meta name="viewport" content="width=device-width,initial-scale=1,
- maximum-scale=1,user-scalable=no">
+ maximum-scale=5,user-scalable=yes">
 <title>Sg_ent_media_radio</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%93%BA%3C/text%3E%3C/svg%3E">
 <style>
-:root{--bg:#fffdf7;--card:#ffffff;--txt:#1e293b;--mut:#7c8699;
- --acc:#f97316;--acc2:#0ea5e9;--line:#ece5d3;--chip:#ffffff;--hov:#fff3e4;
- --sh:0 2px 10px rgba(120,100,60,.08)}
-html[data-theme=dark]{--bg:#0f1220;--card:#181d33;--txt:#e8eaf2;--mut:#8892b0;
- --acc:#e50914;--acc2:#0ea5e9;--line:#262c48;--chip:#232842;--hov:#20263f;
- --sh:0 2px 10px rgba(0,0,0,.35)}
+:root{--bg:#fffdf7;--card:#ffffff;--txt:#1a2332;--mut:#5b6778;
+ --acc:#e07400;--acc2:#0c7bb3;--line:#d8cfb8;--chip:#faf6ec;--hov:#fff3e4;
+ --sh:0 2px 10px rgba(120,100,60,.12);
+ /* Age 35-65: larger base font, high contrast */
+ --fs-base:17px;--fs-sm:15px;--fs-xs:13px;--fs-lg:19px;--fs-xl:22px;
+ --btn-h:48px;--btn-h-sm:42px;--radius:12px;--radius-lg:16px}
+html[data-theme=dark]{--bg:#0a0d1a;--card:#161b30;--txt:#f0f2fa;--mut:#a8b2c8;
+ --acc:#ff8c1a;--acc2:#4fc3f7;--line:#2d3556;--chip:#1f2540;--hov:#232a45;
+ --sh:0 2px 10px rgba(0,0,0,.45)}
 *{box-sizing:border-box;margin:0;-webkit-tap-highlight-color:transparent}
 body{font-family:'Segoe UI',system-ui,Arial,sans-serif;color:var(--txt);
  background:linear-gradient(165deg,#fff7ea 0%,#fffdf7 38%,#eef7ff 100%);
- min-height:100vh}
-html[data-theme=dark] body{background:#0f1220}
+ min-height:100vh;font-size:var(--fs-base);line-height:1.55}
+html[data-theme=dark] body{background:#0a0d1a}
 header{position:sticky;top:0;background:var(--card);
- border-bottom:1px solid var(--line);z-index:9;padding:8px 18px 10px}
-#mainnav{display:flex;gap:6px;padding:2px 0 8px;border-bottom:1px dashed
- var(--line);margin-bottom:8px;overflow-x:auto}
-#mainnav button{border:1px solid var(--line);border-radius:20px;padding:7px 16px;
- background:var(--chip);color:var(--mut);cursor:pointer;font-size:13px;
- font-weight:700;white-space:nowrap}
+ border-bottom:2px solid var(--line);z-index:9;padding:10px 18px 12px}
+#mainnav{display:flex;gap:8px;padding:2px 0 10px;border-bottom:1px dashed
+ var(--line);margin-bottom:10px;overflow-x:auto}
+#mainnav button{border:2px solid var(--line);border-radius:24px;padding:10px 18px;
+ background:var(--chip);color:var(--txt);cursor:pointer;font-size:var(--fs-base);
+ font-weight:700;white-space:nowrap;min-height:var(--btn-h)}
 #mainnav button.on{background:linear-gradient(90deg,#fb923c,#f97316);
  color:#fff;border-color:transparent}
 #mainnav button[data-mode=radio].on{background:linear-gradient(90deg,#38bdf8,#0284c7)}
-.row1{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:8px}
-h1{font-size:19px;font-weight:800;background:linear-gradient(90deg,var(--acc),
+.row1{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:10px}
+h1{font-size:24px;font-weight:800;background:linear-gradient(90deg,var(--acc),
  var(--acc2));-webkit-background-clip:text;background-clip:text;
  -webkit-text-fill-color:transparent}
-.tabs{display:flex;gap:6px;flex-wrap:wrap;flex:1}
-.tabs button{border:1px solid var(--line);border-radius:20px;padding:6px 13px;
- background:var(--chip);color:var(--mut);cursor:pointer;font-size:13px}
+.tabs{display:flex;gap:8px;flex-wrap:wrap;flex:1}
+.tabs button{border:2px solid var(--line);border-radius:24px;padding:9px 16px;
+ background:var(--chip);color:var(--txt);cursor:pointer;font-size:var(--fs-sm);
+ font-weight:600;min-height:var(--btn-h-sm)}
 .tabs button.active{background:linear-gradient(90deg,#fb923c,#f97316);
  color:#fff;border-color:transparent}
 .tabs button.radio.active{background:linear-gradient(90deg,#38bdf8,#0284c7)}
-.hdrbtn{border:0;background:none;color:var(--mut);cursor:pointer;font-size:17px;
- padding:2px 5px}.hdrbtn:hover{color:var(--acc)}.hdrbtn:disabled{opacity:.3}
-.cachebtn{border:1px solid var(--line);border-radius:9px;background:var(--chip);
- color:var(--mut);cursor:pointer;padding:6px 9px;font-size:12px;font-weight:700}
+.hdrbtn{border:0;background:none;color:var(--mut);cursor:pointer;font-size:22px;
+ padding:6px 8px;min-width:44px;min-height:44px}.hdrbtn:hover{color:var(--acc)}.hdrbtn:disabled{opacity:.3}
+.cachebtn{border:2px solid var(--line);border-radius:12px;background:var(--chip);
+ color:var(--txt);cursor:pointer;padding:8px 12px;font-size:var(--fs-xs);font-weight:700;min-height:var(--btn-h-sm)}
 .cachebtn:hover{color:var(--acc);border-color:var(--acc)}
 .row2{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
-#q{flex:1;min-width:160px;padding:8px 13px;border-radius:10px;font-size:14px;
- border:1px solid var(--line);background:var(--card);color:var(--txt)}
-.big{cursor:pointer;border:0;border-radius:10px;font-weight:700;
- background:linear-gradient(90deg,#fb923c,#f97316);color:#fff;padding:8px 14px;
- text-decoration:none;display:inline-block;font-size:13px;box-shadow:var(--sh)}
+#q{flex:1;min-width:200px;padding:12px 16px;border-radius:12px;font-size:var(--fs-base);
+ border:2px solid var(--line);background:var(--card);color:var(--txt);min-height:var(--btn-h)}
+#q:focus{outline:3px solid var(--acc);outline-offset:1px;border-color:var(--acc)}
+.big{cursor:pointer;border:0;border-radius:12px;font-weight:700;
+ background:linear-gradient(90deg,#fb923c,#f97316);color:#fff;padding:12px 18px;
+ text-decoration:none;display:inline-block;font-size:var(--fs-sm);box-shadow:var(--sh);min-height:var(--btn-h)}
 .big.blue{background:linear-gradient(90deg,#38bdf8,#0284c7)}
 .big.cy{background:linear-gradient(90deg,#22d3ee,#0891b2)}
 .big.grey{background:#64748b}
 .big:disabled{opacity:.4;cursor:not-allowed}
-.mini{border:1px solid var(--line);background:var(--chip);color:var(--mut);
- border-radius:8px;padding:3px 9px;font-size:11.5px;cursor:pointer;font-weight:700}
+.mini{border:2px solid var(--line);background:var(--chip);color:var(--txt);
+ border-radius:10px;padding:8px 12px;font-size:var(--fs-xs);cursor:pointer;font-weight:700;min-height:var(--btn-h-sm)}
 .mini:hover{color:var(--acc);border-color:var(--acc)}
-label.tog{display:flex;align-items:center;gap:6px;font-size:13px;
- color:var(--mut);cursor:pointer}
-#sortWrap{padding:4px 8px;border:1px solid var(--line);border-radius:10px;
- background:var(--chip)}
-#sortWrap .sort-label{font-size:12px;font-weight:700;color:var(--mut);
+label.tog{display:flex;align-items:center;gap:8px;font-size:var(--fs-sm);
+ color:var(--txt);cursor:pointer;font-weight:600}
+label.tog input[type=checkbox]{width:20px;height:20px;accent-color:var(--acc);cursor:pointer}
+#sortWrap{padding:6px 10px;border:2px solid var(--line);border-radius:12px;
+ background:var(--chip);display:flex;align-items:center;gap:8px;min-height:var(--btn-h)}
+#sortWrap .sort-label{font-size:var(--fs-xs);font-weight:700;color:var(--mut);
  text-transform:uppercase;letter-spacing:.04em}
-#sort{padding:4px 8px;border-radius:8px;border:1px solid var(--line);
- background:var(--card);color:var(--txt);font-size:13px;cursor:pointer}
-#sort:focus{outline:2px solid var(--acc);outline-offset:1px}
-#liveonlyWrap{padding:4px 10px;border:1px solid var(--line);border-radius:10px;
- background:var(--chip);transition:all .15s ease}
+#sort{padding:8px 12px;border-radius:10px;border:2px solid var(--line);
+ background:var(--card);color:var(--txt);font-size:var(--fs-sm);cursor:pointer;min-height:var(--btn-h-sm)}
+#sort:focus{outline:3px solid var(--acc);outline-offset:1px}
+#liveonlyWrap{padding:8px 14px;border:2px solid var(--line);border-radius:12px;
+ background:var(--chip);transition:all .15s ease;font-weight:600;min-height:var(--btn-h);display:flex;align-items:center;gap:8px}
 #liveonlyWrap:hover{border-color:var(--acc)}
 #liveonlyWrap.has-live{border-color:#ef4444;background:rgba(239,68,68,.08)}
 #liveonlyWrap.has-live .live-dot,
-#liveonlyWrap .live-dot{display:inline-block;width:8px;height:8px;border-radius:50%;
+#liveonlyWrap .live-dot{display:inline-block;width:10px;height:10px;border-radius:50%;
  background:var(--mut);transition:all .15s ease}
 #liveonlyWrap.has-live .live-dot{background:#ef4444;box-shadow:0 0 0 0 rgba(239,68,68,.6);
  animation:livePulse 1.6s infinite}
@@ -982,74 +873,74 @@ label.tog{display:flex;align-items:center;gap:6px;font-size:13px;
  background:rgba(239,68,68,.15);color:#ef4444;font-size:11px;font-weight:700;
  font-variant-numeric:tabular-nums;line-height:1.4}
 #liveCount:empty{display:none}
-#chips{display:flex;gap:6px;overflow-x:auto;padding:8px 0 2px;
+#chips{display:flex;gap:8px;overflow-x:auto;padding:10px 0 4px;
  -webkit-overflow-scrolling:touch}
-#chips::-webkit-scrollbar{height:5px}
-#chips::-webkit-scrollbar-thumb{background:var(--line)}
-#chips button{white-space:nowrap;border:1px solid var(--line);
- border-radius:16px;padding:5px 12px;background:var(--chip);color:var(--mut);
- cursor:pointer;font-size:12.5px}
+#chips::-webkit-scrollbar{height:6px}
+#chips::-webkit-scrollbar-thumb{background:var(--line);border-radius:3px}
+#chips button{white-space:nowrap;border:2px solid var(--line);
+ border-radius:20px;padding:8px 14px;background:var(--chip);color:var(--txt);
+ cursor:pointer;font-size:var(--fs-sm);font-weight:600;min-height:var(--btn-h-sm)}
 #chips button.active{background:var(--acc);color:#fff;border-color:transparent}
-.legend{padding:3px 18px 0;color:var(--mut);font-size:11px}
-.note{margin:10px 18px 2px;color:var(--mut);font-size:13px;display:flex;
+.legend{padding:4px 18px 0;color:var(--mut);font-size:var(--fs-xs)}
+.note{margin:12px 18px 4px;color:var(--mut);font-size:var(--fs-sm);display:flex;
  justify-content:space-between;flex-wrap:wrap;gap:8px}
-.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));
- gap:12px;padding:14px 18px 96px;max-width:1700px;margin:0 auto}
-.card{background:var(--card);border:1px solid var(--line);border-radius:16px;
- padding:10px;text-align:center;position:relative;display:flex;
- flex-direction:column;gap:5px;box-shadow:var(--sh);transition:.12s}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));
+ gap:14px;padding:16px 18px 96px;max-width:1700px;margin:0 auto}
+.card{background:var(--card);border:2px solid var(--line);border-radius:16px;
+ padding:12px;text-align:center;position:relative;display:flex;
+ flex-direction:column;gap:6px;box-shadow:var(--sh);transition:.12s}
 .card:hover{transform:translateY(-2px);border-color:#fdba74}
-.card img{width:50px;height:50px;object-fit:contain;margin:2px auto 0;
+.card img{width:60px;height:60px;object-fit:contain;margin:4px auto 0;
  border-radius:8px}
-.cname{font-size:12.5px;font-weight:700;line-height:16px;height:32px;overflow:hidden}
-.now{font-size:11px;color:#16a34a;height:26px;line-height:13px;overflow:hidden}
-.grp{color:var(--mut);font-size:11px;height:13px;overflow:hidden;white-space:nowrap}
-.bds{display:flex;gap:4px;justify-content:center;height:16px}
-.bd{font-size:10px;padding:1px 7px;border-radius:8px;font-weight:700;color:#fff}
+.cname{font-size:var(--fs-sm);font-weight:700;line-height:1.3;height:42px;overflow:hidden}
+.now{font-size:var(--fs-xs);color:#16a34a;min-height:30px;line-height:1.3;overflow:hidden}
+.grp{color:var(--mut);font-size:var(--fs-xs);height:18px;overflow:hidden;white-space:nowrap;font-weight:600}
+.bds{display:flex;gap:4px;justify-content:center;height:20px}
+.bd{font-size:11px;padding:2px 8px;border-radius:8px;font-weight:700;color:#fff}
 .bhd{background:#0284c7}.bsd{background:#64748b}.blang{background:#16a34a}
-.top{position:absolute;top:7px;left:8px;right:8px;display:flex;
+.top{position:absolute;top:8px;left:8px;right:8px;display:flex;
  justify-content:space-between}
-.dot{border:1px solid var(--line);width:22px;height:22px;border-radius:50%;
- background:var(--chip);color:var(--mut);cursor:pointer;font-size:11px;
- line-height:20px;padding:0}
+.dot{border:2px solid var(--line);width:28px;height:28px;border-radius:50%;
+ background:var(--chip);color:var(--mut);cursor:pointer;font-size:13px;
+ line-height:24px;padding:0}
 .dot.checking{color:#f59e0b;animation:spin 1s linear infinite}
 .dot.online{color:#16a34a;border-color:#16a34a}
 .dot.dead{color:#ef4444;border-color:#ef4444}
 .dot.unknown{color:#f59e0b;border-color:#f59e0b}
 .dot.nonhttp{color:#0284c7;border-color:#0284c7}
 @keyframes spin{to{transform:rotate(360deg)}}
-.fav{border:0;background:none;color:#cbd5e1;cursor:pointer;font-size:17px;padding:0}
+.fav{border:0;background:none;color:#cbd5e1;cursor:pointer;font-size:22px;padding:4px;min-width:32px;min-height:32px}
 .fav.on{color:#f59e0b}
-.watch{border:1px solid var(--line);border-radius:10px;padding:7px 0;
+.watch{border:2px solid var(--line);border-radius:12px;padding:12px 0;
  background:var(--chip);color:var(--txt);cursor:pointer;font-weight:700;
- width:100%;margin-top:auto}
+ width:100%;margin-top:auto;font-size:var(--fs-sm);min-height:var(--btn-h-sm)}
 .watch:hover{background:linear-gradient(90deg,#fb923c,#f97316);color:#fff;
  border-color:transparent}
-.altvlc{margin-top:4px;font-size:11px;padding:5px 0;background:transparent;
- border:1px dashed var(--line);border-radius:8px;color:var(--mut);cursor:pointer}
+.altvlc{margin-top:6px;font-size:var(--fs-xs);padding:8px 0;background:transparent;
+ border:2px dashed var(--line);border-radius:10px;color:var(--mut);cursor:pointer;font-weight:600;min-height:var(--btn-h-sm)}
 .altvlc:hover{color:var(--acc);border-color:var(--acc)}
-.empty{grid-column:1/-1;text-align:center;color:var(--mut);padding:70px 0}
-#toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%)
- translateY(90px);padding:10px 22px;border-radius:24px;font-size:14px;
- transition:.3s;z-index:99;background:#334155;color:#fff;max-width:86vw}
+.empty{grid-column:1/-1;text-align:center;color:var(--mut);padding:70px 0;font-size:var(--fs-base)}
+#toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%)
+ translateY(90px);padding:14px 26px;border-radius:24px;font-size:var(--fs-sm);
+ transition:.3s;z-index:99;background:#334155;color:#fff;max-width:86vw;font-weight:600}
 body.playing #toast{bottom:110px}
 #toast.ok{background:#16a34a}#toast.bad{background:#dc2626}
 #toast.show{transform:translateX(-50%) translateY(0)}
-#loader{position:fixed;inset:0;background:rgba(255,253,247,.85);display:none;
- place-items:center;z-index:50;text-align:center;color:var(--mut)}
-.spin{width:44px;height:44px;border:4px solid var(--line);
+#loader{position:fixed;inset:0;background:rgba(255,253,247,.9);display:none;
+ place-items:center;z-index:50;text-align:center;color:var(--txt);font-size:var(--fs-lg)}
+.spin{width:48px;height:48px;border:4px solid var(--line);
  border-top-color:var(--acc);border-radius:50%;margin:0 auto 14px;
  animation:spin .8s linear infinite}
-.errbox{margin:40px auto;max-width:420px;background:var(--card);
- border:1px solid #ef4444;border-radius:12px;padding:20px;text-align:center}
-.modal{display:none;position:fixed;inset:0;background:rgba(51,65,85,.55);
+.errbox{margin:40px auto;max-width:480px;background:var(--card);
+ border:2px solid #ef4444;border-radius:14px;padding:24px;text-align:center;font-size:var(--fs-base)}
+.modal{display:none;position:fixed;inset:0;background:rgba(51,65,85,.65);
  z-index:80;place-items:center;padding:16px}
 .modal.open{display:grid}
-.modalcard{background:var(--card);border:1px solid var(--line);
- border-radius:18px;max-width:560px;width:100%;padding:20px;
+.modalcard{background:var(--card);border:2px solid var(--line);
+ border-radius:18px;max-width:600px;width:100%;padding:24px;
  max-height:92vh;overflow-y:auto;box-shadow:var(--sh)}
-.modalcard h3{margin-bottom:10px}
-.modalcard p{font-size:13.5px;color:var(--mut);margin:8px 0;line-height:1.5}
+.modalcard h3{margin-bottom:12px;font-size:var(--fs-lg)}
+.modalcard p{font-size:var(--fs-sm);color:var(--mut);margin:10px 0;line-height:1.55}
 .playercard{max-width:760px}
 #tvplayer{display:block;width:100%;max-height:62vh;min-height:180px;
  background:#000;border-radius:12px;margin:12px 0}
@@ -1058,9 +949,6 @@ body.playing #toast{bottom:110px}
 .lanurl{background:var(--bg);border:1px dashed var(--acc2);border-radius:10px;
  padding:10px;text-align:center;font-size:16px;font-weight:700;margin:10px 0;
  user-select:all}
-.qrbox{display:inline-block;margin:8px 12px;text-align:center}
-.qrbox .cap{font-size:12px;color:var(--mut);margin-top:4px}
-.qrbox img{background:#fff;padding:6px;border-radius:10px}
 .mrow{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0}
 .closex{float:right;border:0;background:none;color:var(--mut);font-size:20px;
  cursor:pointer}
@@ -1106,7 +994,6 @@ body.playing #pbar{display:flex}
 /* ===== panels (news/markets/books) ===== */
 .panel{display:none;padding:14px 18px 120px;max-width:1200px;margin:0 auto}
 body[data-mode=news] #panel-news{display:block}
-body[data-mode=markets] #panel-markets{display:block}
 body[data-mode=books] #panel-books{display:block}
 body[data-mode=podcasts] #panel-podcasts{display:block}
 .utilitygrid{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}
@@ -1193,31 +1080,6 @@ body[data-mode=podcasts] #panel-podcasts{display:block}
 .nlist.small .ni{padding:9px}
 .nlist.small .ni img{width:64px;height:48px}
 .nlist.small .nitxt h3{font-size:13px}
-/* markets */
-.mksec{margin:16px 0 8px;font-size:13px;letter-spacing:.06em;color:var(--mut)}
-.mksec .mini{margin-left:8px}
-.mkrow{display:flex;align-items:center;gap:12px;background:var(--card);
- border:1px solid var(--line);border-radius:14px;padding:11px 14px;
- margin-bottom:8px;cursor:pointer;transition:.12s;flex-wrap:wrap}
-.mkrow:hover{border-color:#93c5fd;background:var(--hov)}
-.mkrow.na{cursor:default;color:var(--mut)}
-.mkid{flex:1;min-width:130px;display:flex;align-items:center;gap:8px}
-.mkid b{font-size:14px}
-.mkst{font-size:9.5px;font-weight:800;padding:2px 7px;border-radius:8px}
-.mkst.live{background:#dcfce7;color:#16a34a}
-.mkst.off{background:#f1f5f9;color:#94a3b8}
-.rm{border:0;background:none;color:#cbd5e1;cursor:pointer;font-size:13px;padding:2px}
-.rm:hover{color:#ef4444}
-.mknum{display:flex;align-items:baseline;gap:10px}
-.mkp{font-weight:800;font-size:15px;font-variant-numeric:tabular-nums}
-.mchg{font-size:12.5px;font-weight:800}
-.mchg.up{color:#16a34a}.mchg.down{color:#dc2626}
-.mksk{width:120px;height:36px}
-.mksk svg{display:block}
-.chartbox{background:var(--bg);border:1px solid var(--line);border-radius:12px;
- padding:10px;overflow-x:auto;margin:8px 0}
-.chkstats{font-size:13px;color:var(--mut);display:flex;gap:14px;flex-wrap:wrap}
-.chkstats b{color:var(--txt);font-size:16px}
 /* books */
 .contstrip{margin:2px 0 10px;color:var(--mut);font-size:12.5px;
  display:flex;gap:8px;align-items:center;flex-wrap:wrap}
@@ -1251,50 +1113,48 @@ body[data-mode=podcasts] #panel-podcasts{display:block}
 .bvbot{justify-content:center}
 #bvprog{font-size:12px;color:inherit;opacity:.65;min-width:130px;text-align:center}
 @media(max-width:760px){
- header{padding:6px 10px 8px}
- h1{font-size:16px;width:100%;order:-1;margin-bottom:2px}
+ header{padding:8px 10px 10px}
+ h1{font-size:18px;width:100%;order:-1;margin-bottom:4px}
  .row1{gap:8px}
- #mainnav{padding-bottom:6px}
- #mainnav button{padding:6px 12px;font-size:12px}
+ #mainnav{padding-bottom:8px}
+ #mainnav button{padding:8px 14px;font-size:14px;min-height:44px}
  .tabs{overflow-x:auto;flex-wrap:nowrap;padding-bottom:4px}
- .tabs button{flex:0 0 auto}
- .hdrbtn{font-size:20px;padding:4px 6px}
- #q{width:100%;min-width:0;order:-1}
+ .tabs button{flex:0 0 auto;min-height:40px;padding:8px 12px;font-size:14px}
+ .hdrbtn{font-size:22px;padding:6px 8px;min-width:44px;min-height:44px}
+ #q{width:100%;min-width:0;order:-1;font-size:16px;min-height:48px;padding:12px 14px}
  .row2{gap:8px}
- .big{padding:9px 12px;font-size:12.5px}
+ .big{padding:10px 14px;font-size:14px;min-height:44px}
  .grid{grid-template-columns:repeat(2,minmax(0,1fr));
-  gap:8px;padding:10px 8px 180px}
- .card{padding:8px;border-radius:14px}
- .card img{width:42px;height:42px}
- .cname{font-size:12px;height:30px}
+  gap:10px;padding:12px 10px 180px}
+ .card{padding:10px;border-radius:14px}
+ .card img{width:52px;height:52px}
+ .cname{font-size:14px;height:38px;line-height:1.3}
  .legend,.note{padding-left:10px;padding-right:10px;margin-left:0;margin-right:0}
- .panel{padding:12px 10px 130px}
+ .panel{padding:14px 10px 130px}
  .ni{padding:10px}
  .ni img{width:74px;height:56px}
  .ni.hero img{height:140px}
- .nitxt h3{font-size:13.5px}
- .mkrow{padding:10px}
- .mksk{width:90px}
+ .nitxt h3{font-size:15px}
  #pbar{left:8px;right:8px;bottom:8px;flex-wrap:wrap;padding:10px;gap:8px;
   margin-bottom:env(safe-area-inset-bottom)}
  #pbinfo{min-width:calc(100% - 116px)}
- #pbar button{width:46px;height:46px}
+ #pbar button{width:48px;height:48px}
  #pbplay{order:2}#pbstop{order:3}
- #tvplayer{min-height:150px;max-height:48vh}
+ #tvplayer{min-height:180px;max-height:48vh}
  .playeractions{display:grid;grid-template-columns:1fr 1fr}
  .playeractions .big{min-width:0;padding:12px 6px}
  .utilitygrid{grid-template-columns:1fr 1fr}
  #guide,#set,#themebtn,#help{display:none}
  body.playing #toast{bottom:180px}
- #chips{margin:0 -2px;padding-bottom:5px}
- #chips button{min-height:34px;padding:7px 10px}
- .note{font-size:12px;line-height:1.45}
- .grp{height:26px;white-space:normal;line-height:13px}
- .dot,.fav{min-width:30px;min-height:30px}
- .watch,.altvlc{min-height:40px}
+ #chips{margin:0 -2px;padding-bottom:6px}
+ #chips button{min-height:40px;padding:8px 12px;font-size:14px}
+ .note{font-size:13px;line-height:1.45}
+ .grp{height:20px;white-space:normal;line-height:14px}
+ .dot,.fav{min-width:36px;min-height:36px}
+ .watch,.altvlc{min-height:44px;font-size:14px}
  body{padding-top:env(safe-area-inset-top)}
  .card:hover{transform:none}
- .ni:hover,.mkrow:hover{transform:none}
+ .ni:hover{transform:none}
  /* --- Mobile toolbar cleanup (added for live-only + Sort dropdown) --- */
  /* "Whole list in VLC" stays as an option on mobile, but smaller/secondary so it
     doesn't dominate the toolbar — some streams don't play in-browser and VLC is
@@ -1338,7 +1198,6 @@ body[data-mode=podcasts] #panel-podcasts{display:block}
   <button data-mode="radio">&#127897; Radio</button>
   <button data-mode="news">&#128240; News</button>
   <button data-mode="podcasts">&#127911; Podcasts</button>
-  <button data-mode="markets">&#128200; Markets</button>
   <button data-mode="books">&#128218; Books</button>
  </div>
  <div class="row1">
@@ -1346,7 +1205,6 @@ body[data-mode=podcasts] #panel-podcasts{display:block}
   <h1>Sg_ent_media_radio</h1>
   <div class="tabs" id="tabs"></div>
   <button class="hdrbtn" id="guide" title="TV Guide">&#128214;</button>
-  <button class="hdrbtn" id="mob" title="Phone QR">&#x1F4F1;</button>
   <button class="hdrbtn" id="set" title="Settings">&#9881;</button>
   <button class="hdrbtn" id="themebtn" title="Theme">&#9788;</button>
   <button class="hdrbtn" id="help" title="Help / checks">&#10067;</button>
@@ -1389,12 +1247,6 @@ body[data-mode=podcasts] #panel-podcasts{display:block}
  <div class="pbar2"><input id="nq"
   placeholder="Filter headlines&hellip;" autocomplete="off"></div>
  <div id="nlist" class="nlist"><div class="pempty">Pick a topic above</div></div>
-</div>
-
-<div class="panel" id="panel-markets">
- <div id="mkwrap"><div class="pempty">Loading quotes&#8230;</div></div>
- <h4 class="mksec">&#128240; MARKET NEWS</h4>
- <div id="mknews" class="nlist small"><div class="pempty">&#8230;</div></div>
 </div>
 
 <div class="panel" id="panel-books">
@@ -1444,28 +1296,16 @@ body[data-mode=podcasts] #panel-podcasts{display:block}
 
 <div class="modal" id="welcome"><div class="modalcard">
  <h3>&#127749; Welcome to Sg_ent_media_radio</h3>
- <p>TV &#8226; FM Radio &#8226; News &#8226; Stock Markets &#8226; Free Books.
+ <p>TV &#8226; FM Radio &#8226; News &#8226; Free Books.
  Quick system check:</p>
  <div id="wbchecks"><p>Checking&#8230;</p></div>
  <p style="margin-top:12px"><b>How to use:</b><br>
  &#128250; Media: pick tab &#8594; Watch (TV opens VLC) / Listen (plays here).<br>
  &#128240; News: tap headline &#8594; clean reader.<br>
- &#128200; Markets: live NIFTY/Sensex/US + watchlist, tap for chart.<br>
  &#128218; Books: free classics English+&#2361;&#2367;&#2344;&#2381;&#2342;&#2368;,
  position auto-saved.<br> Radio keeps playing while you read &#127911;</p>
  <div class="mrow" id="welcome-actions">
-  <button class="big blue" id="setupPhone" onclick="showModal('mobpanel',true);wbDone()">
-   &#x1F4F1; Set up phone</button>
   <button class="big grey" onclick="wbDone()">Start exploring</button></div>
-</div></div>
-
-<div class="modal" id="mobpanel"><div class="modalcard">
- <button class="closex" onclick="showModal('mobpanel',false)">&times;</button>
- <h3>&#x1F4F1; Open on your phone</h3>
- __QRBLOCKS__
- <p><b>Step 1.</b> Same Wi-Fi (home QR) or Tailscale ON (anywhere QR).<br>
- <b>Step 2.</b> Scan / type address into the phone browser.</p>
- <div class="mrow" id="mlinks"></div>
 </div></div>
 
 <div class="modal" id="playermodal"><div class="modalcard playercard">
@@ -1802,7 +1642,6 @@ function setMode(m){
  $('grid').style.display=med?'grid':'none';
  if(m==='news'&&!NEWS.loaded)nShow(NEWS.cat);
  if(m==='podcasts'&&!POD.loaded)podShow();
- if(m==='markets'){mkPaint();mkStart()}else mkStop();
  if(m==='books'&&!BK.init)bInit();
  if(m==='tv'&&S.pl!=='in')load('in');
  if(m==='radio'&&S.pl!=='rin')load('rin');
@@ -1820,7 +1659,6 @@ var ROUTES={
  'radio':function(){setMode('radio');load('rin')},
  'news':function(){setMode('news')},
  'podcasts':function(){setMode('podcasts')},
- 'markets':function(){setMode('markets')},
  'books':function(){setMode('books')}
 };
 function routeChange(hash){
@@ -1865,11 +1703,11 @@ function showHomeDashboard(){
  var f=$u('favorites',{});
  var favCount=0;for(var cat in f)favCount+=f[cat].length;
  h+='<section class="spa-section"><h3>Favorites ('+favCount+')</h3><div class="spa-cards">';
- if(!favCount){h+='<div class="pempty">Star your favorite TV, radio, podcasts, books and markets to see them here.</div>'}
+ if(!favCount){h+='<div class="pempty">Star your favorite TV, radio, podcasts and books to see them here.</div>'}
  else{var shown=0;for(var cat in f){f[cat].slice(0,3).forEach(function(a){if(shown>=6)return;h+='<div class="spa-card" onclick="navigateTo(&quot;'+esc(cat||'tv')+'&quot;)"><div class="spa-icon">⭐</div><div class="spa-title">'+esc(a.t||a.n||'')+'</div><div class="spa-sub">'+esc(cat)+'</div></div>';shown++})}}
  h+='</div></section>';
  // Today's useful content
- h+='<section class="spa-section"><h3>Today&#39;s Useful Content</h3><div class="spa-cards"><div class="spa-card" onclick="navigateTo(&quot;news&quot;)"><div class="spa-icon">📰</div><div class="spa-title">Latest news headlines</div><div class="spa-sub">60+ stories from top sources</div></div><div class="spa-card" onclick="navigateTo(&quot;markets&quot;)"><div class="spa-icon">📈</div><div class="spa-title">Market snapshot</div><div class="spa-sub">NIFTY • SENSEX • US markets</div></div><div class="spa-card" onclick="navigateTo(&quot;books&quot;)"><div class="spa-icon">📚</div><div class="spa-title">Free books</div><div class="spa-sub">70,000+ public domain titles</div></div></div></section>';
+ h+='<section class="spa-section"><h3>Today&#39;s Useful Content</h3><div class="spa-cards"><div class="spa-card" onclick="navigateTo(&quot;news&quot;)"><div class="spa-icon">📰</div><div class="spa-title">Latest news headlines</div><div class="spa-sub">60+ stories from top sources</div></div><div class="spa-card" onclick="navigateTo(&quot;books&quot;)"><div class="spa-icon">📚</div><div class="spa-title">Free books</div><div class="spa-sub">70,000+ public domain titles</div></div></div></section>';
  $('grid').innerHTML=h;
  $('grid').style.display='grid';
  document.querySelector('.row2').style.display='none';
@@ -1879,7 +1717,7 @@ function showHomeDashboard(){
 function showFavoritesPage(){
  var f=$u('favorites',{});
  var h='<div class="spa-home"><h2>⭐ Favorites</h2><div class="spa-sections">';
- var cats=['tv','radio','news','podcasts','books','markets'];
+ var cats=['tv','radio','news','podcasts','books'];
  cats.forEach(function(cat){
   var items=f[cat]||[];
   if(!items.length)return;
@@ -1923,7 +1761,7 @@ function showGlobalSearch(){
  var out='<div class="spa-home"><h2>🔍 Search Everything</h2><div class="spa-sections">';
  if(!q){out+='<div class="pempty">Type in the search bar above to search TV, Radio, News, Podcasts, Books and Markets.</div>'}
  else{
-  var cats=['tv','radio','news','podcasts','books','markets'];
+  var cats=['tv','radio','news','podcasts','books'];
   var found=0;
   cats.forEach(function(cat){
    var items=[];
@@ -1932,7 +1770,6 @@ function showGlobalSearch(){
    else if(cat==='news')items=(NEWS.items||[]);
    else if(cat==='podcasts')items=(POD.items||[]);
    else if(cat==='books')items=(BK.items||[]);
-   else if(cat==='markets')items=(MKT.rows||[]);
    var matches=items.filter(function(x){return((x.t||x.n||x.s||x.sym||'').toLowerCase().indexOf(q)>-1)}).slice(0,10);
    if(matches.length){
     found++;
@@ -2472,7 +2309,7 @@ $('glist').onclick=function(e){var r=e.target.closest('.grow');
 /* ================= NEWS PANEL ================= */
 var NEWS={cat:'top',items:[],loaded:false};
 var NCATS=[['top','Top'],['india','India'],['business','Business'],
- ['markets','Markets'],['tech','Tech'],['sports','Sports'],
+ ['finance','Finance'],['tech','Tech'],['sports','Sports'],
  ['world','World'],
  ['hindi','&#2361;&#2367;&#2344;&#2381;&#2342;&#2368;']];
 function nChips(){var h='';
@@ -2642,193 +2479,6 @@ function podShow(){
  $('podq').addEventListener('input',podPaint);
  $('podrefresh').onclick=function(){POD.loaded=false;podShow()};
 
-/* ================= MARKETS PANEL ================= */
-var MKT={timer:null,rows:null,watch:[]};
-try{MKT.watch=JSON.parse(localStorage.getItem('srt-watch')||'null')||[]}
-catch(e){}
-if(!MKT.watch.length)MKT.watch=['RELIANCE.NS','TCS.NS','INFY.NS',
- 'HDFCBANK.NS','AAPL','MSFT','NVDA'];
-var IDX_IN=[['^NSEI','NIFTY 50'],['^BSESN','SENSEX'],
- ['^NSEBANK','BANK NIFTY'],['INR=X','USD/INR']];
-var IDX_US=[['^DJI','DOW JONES'],['^GSPC','S&P 500'],['^IXIC','NASDAQ']];
-function mkSyms(){return IDX_IN.concat(IDX_US).concat(
- MKT.watch.map(function(s){return[s,s]}))}
-function money(n,cur){
- if(n==null||isNaN(n))return'-';
- var s=(Math.abs(n)>=1000)?
-  n.toLocaleString('en-IN',{maximumFractionDigits:2}):n.toFixed(2);
- return(cur==='INR'?'\\u20B9':cur==='USD'?'$':'')+s}
-function chgHtml(pr,pv){
- if(pr==null||!pv)return'<span class="mchg">-</span>';
- var d=pr-pv,p=d/pv*100,up=d>=0;
- return'<span class="mchg '+(up?'up':'down')+'">'+
-  (up?'\\u25B2 ':'\\u25BC ')+Math.abs(p).toFixed(2)+'%</span>'}
-function sparkV(vals,w,h){
- if(!vals||vals.length<2)return'';
- var mn=Math.min.apply(null,vals),mx=Math.max.apply(null,vals);
- var rng=(mx-mn)||1,col=vals[vals.length-1]>=vals[0]?'#16a34a':'#dc2626';
- var pts=[];
- for(var i=0;i<vals.length;i++){
-  pts.push(((i/(vals.length-1))*w).toFixed(1)+','+
-   (h-3-((vals[i]-mn)/rng)*(h-6)).toFixed(1))}
- return'<svg width="'+w+'" height="'+h+'"><polyline fill="none" stroke="'+
-  col+'" stroke-width="2" points="'+pts.join(' ')+'"/></svg>'}
- function candleV(rows,w,h){
- if(!rows||rows.length<2)return'';
- rows=rows.slice(-80);var lo=Math.min.apply(null,rows.map(function(x){return x.l})),
-  hi=Math.max.apply(null,rows.map(function(x){return x.h})),rng=(hi-lo)||1,step=w/rows.length;
- var s='<svg width="'+w+'" height="'+h+'" role="img" aria-label="candlestick chart">';
- rows.forEach(function(x,i){var up=x.c>=x.o,col=up?'#16a34a':'#dc2626',
-   y=function(v){return h-4-((v-lo)/rng)*(h-8)},x0=i*step+step/2,
-   top=y(Math.max(x.o,x.c)),bot=y(Math.min(x.o,x.c));
-  s+='<line x1="'+x0.toFixed(1)+'" y1="'+y(x.h).toFixed(1)+'" x2="'+x0.toFixed(1)+'" y2="'+y(x.l).toFixed(1)+'" stroke="'+col+'"/>'+
-   '<rect x="'+(i*step+1).toFixed(1)+'" y="'+top.toFixed(1)+'" width="'+Math.max(2,step-2).toFixed(1)+'" height="'+Math.max(1,bot-top).toFixed(1)+'" fill="'+col+'"/>'});
- return s+'</svg>'}
-function barV(vals,w,h){
- if(!vals||vals.length<2)return'';
- var mn=Math.min.apply(null,vals),mx=Math.max.apply(null,vals),rng=(mx-mn)||1;
- var step=w/vals.length,b='';
- for(var i=0;i<vals.length;i++){
-  var bh=Math.max(2,((vals[i]-mn)/rng)*(h-8));
-  b+='<rect x="'+(i*step).toFixed(1)+'" y="'+(h-bh).toFixed(1)+
-  '" width="'+Math.max(1,step-1).toFixed(1)+'" height="'+bh.toFixed(1)+
-  '" fill="'+(vals[i]>=vals[0]?'#16a34a':'#dc2626')+'"/>'}
- return'<svg width="'+w+'" height="'+h+'">'+b+'</svg>'}
-function mkRow(q,label,canRm){
- var live=q.state==='REGULAR'||q.state==='OPEN';
- var fav=PS.isFavorite('markets',q)?'⭐':'☆';
- return'<div class="mkrow" data-sym="'+esc(q.sym)+'" onclick="openChart(&quot;'+esc(q.sym)+'&quot;)">'+
-  '<div class="mkid"><b>'+esc(label||q.name||q.sym)+'</b>'+
-  '<span class="mkst '+(live?'live':'off')+'">'+(live?'LIVE':'CLOSED')+
-  '</span>'+fav+(canRm?'<button class="rm" data-sym="'+esc(q.sym)+
-  '" title="Remove">\\u2715</button>':'')+'</div>'+
-  '<div class="mknum"><span class="mkp">'+money(q.price,q.cur)+'</span>'+
-  chgHtml(q.price,q.prev)+'<small>O '+money(q.open,q.cur)+
-  ' H '+money(q.high,q.cur)+' L '+money(q.low,q.cur)+
-  ' C '+money(q.close,q.cur)+'</small></div>'+
-  '<div class="mksk">'+sparkV(q.cl40,120,36)+'</div></div>'}
-function mkPaint(){
- if(!MKT.rows)$('mkwrap').innerHTML=
-  '<div class="pempty">Loading quotes&#8230;</div>';
- else mkRender()}
-function mkRender(){
- var by={};(MKT.rows||[]).forEach(function(r){by[r.sym]=r});
- function sec(t,list,rm){
-  var h='<h4 class="mksec">'+t+'</h4>';
-  list.forEach(function(p){var q=by[p[0]];
-   if(!q){h+='<div class="mkrow na"><div class="mkid"><b>'+esc(p[1])+
-    '</b></div><span>unavailable</span></div>';return}
-   h+=mkRow(q,p[1],rm)});
-  return h}
- $('mkwrap').innerHTML=
-  sec('&#127470;&#127475; INDIA',IDX_IN,false)+
-  sec('&#127482;&#127480; US MARKETS',IDX_US,false)+
-  '<h4 class="mksec">&#9733; MY WATCHLIST'+
-  '<button class="mini" id="mkadd">+ add symbol</button></h4>'+
-  (MKT.watch.length?
-   MKT.watch.map(function(s){var q=by[s];
-    return q?mkRow(q,null,true):
-     '<div class="mkrow na"><div class="mkid"><b>'+esc(s)+
-     '</b></div><span>unavailable</span></div>'}).join(''):
-   '<div class="pempty">Tap + add to track stocks</div>');
- var ad=$('mkadd');if(ad)ad.onclick=mkAdd}
-function saveWatch(){localStorage.setItem('srt-watch',
- JSON.stringify(MKT.watch))}
-function mkRefresh(){
- fetch('/api/markets?symbols='+
-  encodeURIComponent(mkSyms().map(function(p){return p[0]}).join(',')))
- .then(function(r){return r.json()})
- .then(function(j){MKT.rows=j.quotes||[];mkRender()})
- .catch(function(){$('mkwrap').innerHTML=
-  '<div class="pempty">Quotes unavailable right now.<br>'+
-  '<button class="big" onclick="mkRefresh()">Retry</button></div>'})}
-window.mkRefresh=mkRefresh;
-function mkStart(){mkRefresh();clearInterval(MKT.timer);
- MKT.timer=setInterval(function(){if(MODE==='markets')mkRefresh()},60000)}
-function mkStop(){clearInterval(MKT.timer)}
-function mkAdd(){
- var s=(prompt('Stock symbol:\\nIndia: TATAMOTORS.NS, WIPRO.NS, SBIN.NS\\nUS: GOOG, AMZN, TSLA')||'').trim().toUpperCase();
- if(!s)return;
- if(!/^[A-Z0-9^.=-]{1,15}$/.test(s)){toast('Invalid symbol','bad');return}
- if(MKT.watch.indexOf(s)<0){MKT.watch.push(s);saveWatch();mkRefresh()}}
-function mkRemove(sym){
- MKT.watch=MKT.watch.filter(function(x){return x!==sym});
- saveWatch();mkRefresh()}
-$('mkwrap').onclick=function(e){
- if(e.target.id==='mkadd')return mkAdd();
- var rm=e.target.closest('.rm');
- if(rm)return mkRemove(rm.dataset.sym);
- var r=e.target.closest('.mkrow');
- if(r&&!r.classList.contains('na'))openChart(r.dataset.sym)};
-/* market news sidebar */
-function mkNews(){
- fetch('/api/news?cat=markets').then(function(r){return r.json()})
- .then(function(j){
-  var it=(j.items||[]).slice(0,6),h='';
-  for(var i=0;i<it.length;i++){
-   h+='<article class="ni" data-mkl="'+esc(it[i].l)+'"><div class="nitxt">'+
-    '<h3>'+esc(it[i].t)+'</h3><span class="nimeta">'+esc(it[i].s)+
-    (it[i].pub?' &middot; '+agoT(it[i].pub):'')+'</span></div></article>'}
-  $('mknews').innerHTML=h||
-   '<div class="pempty">No market news loaded.</div>';
-  var as=$('mknews').querySelectorAll('.ni');
-  for(var k=0;k<as.length;k++)as[k].onclick=function(){
-   var l=this.dataset.mkl;
-   if(/^https?:/.test(l))window.open(l,'_blank','noopener')}})
- .catch(function(){$('mknews').innerHTML=
-  '<div class="pempty">news unavailable</div>'})}
-/* chart modal */
-var CR={'1D':['1d','5m'],'5D':['5d','15m'],'1M':['1mo','60m'],
- '6M':['6mo','1d'],'1Y':['1y','1d']};
-var CS={sym:null,range:'1M',type:'line'};
-function openChart(sym){
- CS.sym=sym;CS.range='1M';
- $('chartsym').textContent=sym;
- showModal('chartmodal',true);loadChart()}
-window.openChart=openChart;
-function loadChart(){
- var rr=CR[CS.range],ph='';
- for(var k in CR)ph+='<button data-r="'+k+'" class="'+
-  (k===CS.range?'active':'')+'">'+k+'</button>';
- $('chartpills').innerHTML=ph;
- var pb=$('chartpills').querySelectorAll('button');
- for(var i=0;i<pb.length;i++)pb[i].onclick=function(){
-  CS.range=this.dataset.r;loadChart()};
- document.querySelectorAll('[data-ct]').forEach(function(b){
-  b.className='mini '+(b.dataset.ct===CS.type?'active':'');
-  b.onclick=function(){CS.type=this.dataset.ct;loadChart()}});
- $('bigchart').innerHTML='<div class="pempty">Loading&#8230;</div>';
- $('chkstats').textContent='';
- fetch('/api/mchart?sym='+encodeURIComponent(CS.sym)+
-  '&range='+rr[0]+'&interval='+rr[1])
- .then(function(r){return r.json()})
- .then(function(j){
-  var cl=j.cl||[];
-  if(cl.length<2){$('bigchart').innerHTML=
-   '<div class="pempty">No chart data</div>';return}
-  $('bigchart').innerHTML=CS.type==='bar'?barV(cl,560,220):
-   (CS.type==='candle'?candleV(j.candles,560,220):sparkV(cl,560,220));
-  var lo=Math.min.apply(null,cl),hi=Math.max.apply(null,cl);
-  $('chkstats').innerHTML='<b>'+money(j.price,j.cur)+'</b>'+
-   chgHtml(j.price,j.prev)+'<span>low '+money(lo,j.cur)+'</span>'+
-   '<span>high '+money(hi,j.cur)+'</span>'+
-  '<span>open '+money(j.open,j.cur)+'</span><span>close '+
-  money(j.close,j.cur)+'</span>'+
-  (j.state?'<span>'+esc(j.state)+'</span>':'')+
-  (j.name?'<span>'+esc(j.name)+'</span>':'')+
-  (j.exchangeName?'<span>'+esc(j.exchangeName)+'</span>':'');
-  fetch('/api/fundamentals?sym='+encodeURIComponent(CS.sym))
-   .then(function(r){return r.json()}).then(function(f){
-    if(f.error)return;
-    $('chkstats').innerHTML+='<span>PE '+(f.pe==null?'-':f.pe.toFixed?
-     f.pe.toFixed(2):f.pe)+'</span><span>mcap '+money(f.marketCap,j.cur)+
-     '</span><span>'+esc(f.sector||'')+'</span><span>'+
-     esc(f.industry||'')+'</span>';
-   }).catch(function(){});
-  })
- .catch(function(){$('bigchart').innerHTML=
-  '<div class="pempty">Failed to load</div>'})}
-
 /* ================= BOOKS PANEL ================= */
 var BK={init:false,q:'',lang:'en,hi',page:1,hasNext:false,hasPrev:false,
  items:[],cur:null,pages:1,pg:0,total:0,
@@ -2986,7 +2636,6 @@ function runChecks(){
    row('TV+Radio DB',j.radio?'pass':'warn',
     j.radio?'reachable':'blocked?')+
    row('News RSS',j.news?'pass':'warn',j.news?'OK':'blocked?')+
-   row('Markets API',j.yax?'pass':'warn',j.yax?'OK':'blocked?')+
    row('Books API',j.books?'pass':'warn',j.books?'OK':'blocked?')})
  .catch(function(){$('wbchecks').innerHTML=
   '<p>Could not run checks.</p>'})}
@@ -3062,7 +2711,7 @@ document.addEventListener('keydown',function(e){
  if(e.key==='/'&&!ISMOBILE&&document.activeElement!==$('q')&&
   MODE==='media'){e.preventDefault();$('q').focus()}
  if(e.key==='Escape'){
-  ['mobpanel','guidepanel','setpanel','welcome','readerview','chartmodal','playermodal']
+  ['guidepanel','setpanel','welcome','readerview','chartmodal','playermodal']
    .forEach(function(m){showModal(m,false)});
   if(document.activeElement===$('q')&&MODE==='media'){
    $('q').value='';$('q').dispatchEvent(new Event('input'))}}});
@@ -3083,7 +2732,6 @@ $('okfirst').addEventListener('change',function(){render(true)});
   if(S.liveonly)wrap.classList.add('has-live');else wrap.classList.remove('has-live');
   if(S.liveonly&&!isTV(S.pl)){toast('Live-only needs a TV playlist','')}
   buildChips();render(true)})})();
-$('mob').onclick=function(){showModal('mobpanel',true)};
 $('set').onclick=function(){showModal('setpanel',true)};
 $('cacheclear').onclick=window.clearCache;
 $('cachetop').onclick=function(){if(confirm('Clear downloaded data and stream checks?'))clearCache()};
@@ -3107,8 +2755,6 @@ new IntersectionObserver(function(es){es.forEach(function(e){
 
 (function(){
  if(ISMOBILE||IS_CLOUD){$('quit').style.display='none'}
- if(ISMOBILE){$('mob').style.display='none';
-  if($('setupPhone'))$('setupPhone').style.display='none'}
  if(IS_CLOUD){$('playall').style.display='none';$('pbvlc').style.display='none'}
  var h='';
  for(var k in PL)h+='<a class="big '+(PL[k].t==='radio'?'cy':'blue')+
@@ -3124,6 +2770,29 @@ class Handler(BaseHTTPRequestHandler):
     def send(self, code, body, ctype="text/html; charset=utf-8", extra=None):
         d = body.encode("utf-8", errors="replace") if isinstance(body, str) \
             else body
+        # Optimization: gzip-compress large text responses (HTML/JS/CSS/JSON)
+        # when the client supports it. Cuts ~70% off the 200KB+ page payload.
+        accept_enc = self.headers.get("Accept-Encoding", "") or ""
+        supports_gzip = "gzip" in accept_enc
+        is_textual = (ctype.startswith("text/") or
+                      "json" in ctype or "javascript" in ctype or "xml" in ctype)
+        if supports_gzip and is_textual and len(d) > 1024:
+            try:
+                comp = gzip.compress(d, compresslevel=6)
+                if len(comp) < len(d):
+                    d = comp
+                    self.send_response(code)
+                    self.send_header("Content-Type", ctype)
+                    self.send_header("Content-Length", str(len(d)))
+                    self.send_header("Content-Encoding", "gzip")
+                    self.send_header("Vary", "Accept-Encoding")
+                    for k, v in (extra or []): self.send_header(k, v)
+                    self.end_headers()
+                    try: self.wfile.write(d)
+                    except (BrokenPipeError, ConnectionResetError): pass
+                    return
+            except Exception:
+                pass  # fall through to uncompressed send
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(d)))
@@ -3267,25 +2936,7 @@ class Handler(BaseHTTPRequestHandler):
                      "t": "radio" if k in RADIO_SOURCES else "tv"}
                  for k, v in ALLSRC.items()},
                 ensure_ascii=True).replace("</", "<\\/")
-            blocks = []
-            def add_qr(label, url):
-                if not url: return
-                tag, how = qr_img_tag(url)
-                blocks.append('<div class="qrbox">%s<div class="cap"><b>%s'
-                              '</b><br>%s</div></div>' % (tag, label, how))
-            if IS_CLOUD:
-                host = self.headers.get("Host", "").strip()
-                public_url = "https://%s/" % host if host else ""
-                add_qr("Public URL", public_url)
-            else:
-                add_qr("Home Wi-Fi",
-                        "http://%s:%d/" % (LAN_IP, PORT) if LAN_IP else "")
-                add_qr("Anywhere (Tailscale)",
-                        "http://%s:%d/" % (TS_IP, PORT) if TS_IP else "")
-            if not blocks:
-                blocks.append("<p style='color:#f59e0b'>No network detected.</p>")
             page = (SHELL.replace("__PL__", pl_json)
-                         .replace("__QRBLOCKS__", "".join(blocks))
                          .replace("__CLOUD__", "true" if IS_CLOUD else "false"))
             script_url = "/js_check.js?pl=%s&cloud=%s" % (
                 quote(pl_json, safe=""), "true" if IS_CLOUD else "false")
@@ -3340,14 +2991,6 @@ class Handler(BaseHTTPRequestHandler):
                 self.send(502, json.dumps({"error": str(e)[:80]}),
                           "application/json")
 
-        elif u.path == "/api/market/news":
-            try:
-                self.send(200, json.dumps({"items": fetch_market_news_feed()},
-                                          ensure_ascii=True),
-                          "application/json")
-            except Exception as e:
-                self.send(502, json.dumps({"error": str(e)[:80]}),
-                          "application/json")
 
         elif u.path == "/api/cache":
             CACHE.clear(); NEWS_CACHE.clear(); EPG_CACHE.clear(); EPG_STATE.clear()
@@ -3355,70 +2998,8 @@ class Handler(BaseHTTPRequestHandler):
             self.send(200, '{"ok":true,"msg":"Server caches cleared"}',
                       "application/json")
 
-        elif u.path == "/api/markets":
-            syms = [s.strip()
-                    for s in qs.get("symbols", [""])[0].split(",")
-                    if s.strip()][:20]
-            if not syms:
-                return self.send(400, '{"error":"no symbols"}',
-                                 "application/json")
-            def one(s):
-                try: return yf_chart(s)
-                except Exception: return None
-            out = []
-            with ThreadPoolExecutor(max_workers=6) as ex:
-                for r in ex.map(one, syms):
-                    if r is None: continue
-                    r["cl40"] = r.pop("cl", [])[-40:]
-                    r.pop("ts", None)
-                    out.append(r)
-            self.send(200, json.dumps({"quotes": out},
-                                      ensure_ascii=True),
-                      "application/json")
 
-        elif u.path == "/api/mchart":
-            sym = qs.get("sym", [""])[0][:20]
-            rng = qs.get("range", ["1mo"])[0]
-            itv = qs.get("interval", ["1d"])[0]
-            if (not sym or rng not in ("1d", "5d", "1mo", "6mo", "1y")
-                    or itv not in ("5m", "15m", "60m", "1d", "1wk")):
-                return self.send(400, '{"error":"bad params"}',
-                                 "application/json")
-            try:
-                self.send(200, json.dumps(yf_chart(sym, rng, itv),
-                                          ensure_ascii=True),
-                          "application/json")
-            except Exception as e:
-                self.send(502, json.dumps({"error": str(e)[:80]}),
-                          "application/json")
 
-        elif u.path == "/api/fundamentals":
-            sym = qs.get("sym", [""])[0][:20]
-            if not sym:
-                return self.send(400, '{"error":"missing symbol"}',
-                                 "application/json")
-            try:
-                self.send(200, json.dumps(yf_fundamentals(sym),
-                                          ensure_ascii=True),
-                          "application/json")
-            except Exception as e:
-                try:
-                    q = yf_chart(sym, "1d", "5m")
-                    self.send(200, json.dumps({
-                        "sym": sym, "name": q.get("name", sym),
-                        "pe": None, "forwardPe": None,
-                        "marketCap": None, "eps": None,
-                        "dividendYield": None, "sector": "",
-                        "industry": "", "source": "chart metadata"
-                    }, ensure_ascii=True), "application/json")
-                except Exception:
-                    self.send(200, json.dumps({
-                        "sym": sym, "name": sym, "pe": None,
-                        "forwardPe": None, "marketCap": None, "eps": None,
-                        "dividendYield": None, "sector": "",
-                        "industry": "", "source": "unavailable"
-                    }, ensure_ascii=True), "application/json")
-                # Quote-summary fundamentals are optional; chart data remains usable.
 
         elif u.path == "/api/books":
             qstr = qs.get("q", [""])[0].strip()[:60]
@@ -3466,18 +3047,6 @@ class Handler(BaseHTTPRequestHandler):
                                        if internetarchive else "unavailable"},
                                       ensure_ascii=True), "application/json")
 
-        elif u.path == "/api/market/quote":
-            sym = qs.get("sym", [""])[0].strip()[:20]
-            if not sym:
-                return self.send(400, '{"error":"missing symbol"}',
-                                 "application/json")
-            try:
-                self.send(200, json.dumps(yf_quote_snapshot(sym),
-                                          ensure_ascii=True),
-                          "application/json")
-            except Exception as e:
-                self.send(502, json.dumps({"error": str(e)[:100]}),
-                          "application/json")
 
         elif u.path == "/api/booktext":
             try:
@@ -3513,7 +3082,6 @@ class Handler(BaseHTTPRequestHandler):
                 "vlc": bool(VLC) and not IS_CLOUD, "lan": LAN_IP, "ts": TS_IP,
                 "net": _p(net_ok), "fw": True if IS_CLOUD else _fw_ok(), "radio": _p(_radio_ok),
                 "news": _p(lambda: len(fetch_news("top")) > 0),
-                "yax": _p(lambda: (yf_chart("^NSEI") or {}).get("price")),
                 "books": _p(lambda: (gutendex({"languages": "hi"}) or {})
                             .get("count", 0) > 100)},
                 ensure_ascii=True), "application/json")
@@ -3672,55 +3240,11 @@ def register_book_routes(app):
         except Exception as exc:
             raise HTTPException(status_code=502, detail=str(exc))
 
-def register_market_routes(app):
-    @app.get("/api/market/quote/{symbol}")
-    async def fastapi_market_quote(symbol: str):
-        try:
-            return yf_quote_snapshot(symbol[:20])
-        except Exception as exc:
-            raise HTTPException(status_code=502, detail=str(exc))
-
-    @app.get("/api/stock/{ticker}")
-    async def get_stock_dashboard(ticker: str):
-        symbol = ticker[:20]
-        try:
-            quote_data = yf_chart(symbol, "5d", "1d")
-            news = []
-            if yfinance is not None:
-                for item in (getattr(yfinance.Ticker(symbol), "news", []) or [])[:5]:
-                    content = item.get("content") or item
-                    provider = content.get("provider") or {}
-                    target = content.get("canonicalUrl") or \
-                        content.get("clickThroughUrl") or {}
-                    news.append({
-                        "title": content.get("title"),
-                        "publisher": provider.get("displayName") or
-                                    item.get("publisher"),
-                        "link": target.get("url") if isinstance(target, dict)
-                                else target,
-                    })
-            return {
-                "ticker": symbol.upper(),
-                "current_price": quote_data.get("price"),
-                "previous_close": quote_data.get("prev"),
-                "chart_data": quote_data.get("candles", []),
-                "news": news,
-            }
-        except Exception as exc:
-            raise HTTPException(status_code=502, detail=str(exc))
-
-    @app.get("/api/market/news-feed")
-    async def get_live_market_news():
-        try:
-            return {"market_news": fetch_market_news_feed()[:5]}
-        except Exception as exc:
-            raise HTTPException(status_code=502, detail=str(exc))
 
 if FastAPI is not None:
     fastapi_app = FastAPI(title="Sg_ent_media_radio API", version=VERSION)
     register_livestream_routes(fastapi_app)
     register_book_routes(fastapi_app)
-    register_market_routes(fastapi_app)
 else:
     fastapi_app = None
 
@@ -3825,20 +3349,15 @@ def selftest():
     except Exception as e:
         _res("News RSS", False, str(e)[:40])
     try:
-        p = yf_chart("^NSEI").get("price")
-        sc += _res("Markets API", bool(p), "NIFTY %s" % p)
-    except Exception as e:
-        _res("Markets API", False, str(e)[:40])
-    try:
         gc = gutendex({"languages": "hi"}).get("count", 0)
         sc += _res("Books API", gc > 100, "%d hindi books" % gc)
     except Exception as e:
         _res("Books API", False, str(e)[:40])
     sc += _res("Internet", net_ok(), "OK" if net_ok() else "offline")
     log("-" * 46)
-    log("RESULT: %s (%d/13 passed)" %
-        ("READY TO RUN" if sc >= 9 else "REVIEW WARNINGS ABOVE", sc))
-    return 0 if sc >= 9 else 1
+    log("RESULT: %s (%d/12 passed)" %
+        ("READY TO RUN" if sc >= 8 else "REVIEW WARNINGS ABOVE", sc))
+    return 0 if sc >= 8 else 1
 
 def main():
     if "--selftest" in sys.argv:
