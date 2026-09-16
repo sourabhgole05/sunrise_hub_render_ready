@@ -1002,6 +1002,7 @@ body[data-mode=books] #panel-books{display:block}
 body[data-mode=podcasts] #panel-podcasts{display:block}
 body[data-mode=today] #panel-today{display:block}
 body[data-mode=space] #panel-space{display:block}
+body[data-mode=ai] #panel-ai{display:block}
 .utilitygrid{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}
 .utilitygrid .hdrbtn{border:1px solid var(--line);border-radius:10px;padding:10px}
 .charttools{display:flex;gap:6px;flex-wrap:wrap;margin:8px 0}
@@ -1147,6 +1148,20 @@ body[data-mode=space] #panel-space{display:block}
  .today-card h4,.space-card h4{font-size:var(--fs-base)}
  .today-card .big-num,.space-card .big-num{font-size:24px}
 }
+/* ===== AI Chat panel ===== */
+.ai-chat{max-height:60vh;overflow-y:auto;padding:8px 0;margin-bottom:12px;
+ scrollbar-thin}
+.ai-msg{max-width:85%;padding:12px 16px;border-radius:16px;margin-bottom:10px;
+ font-size:var(--fs-base);line-height:1.6;word-wrap:break-word}
+.ai-msg.user{background:linear-gradient(90deg,#fb923c,#f97316);color:#fff;
+ margin-left:auto;text-align:right}
+.ai-msg.bot{background:var(--chip);color:var(--txt);border:2px solid var(--line)}
+.ai-msg.loading{color:var(--mut);font-style:italic}
+#aiInput:focus{outline:3px solid var(--acc);outline-offset:1px;border-color:var(--acc)}
+@media(max-width:760px){
+ .ai-msg{max-width:95%;font-size:var(--fs-sm)}
+ .ai-chat{max-height:50vh}
+}
 /* reader + bookview */
 .reader h3{line-height:1.35}
 #rvbody{font-size:15px;line-height:1.75;color:var(--txt);white-space:pre-wrap;
@@ -1257,6 +1272,7 @@ body[data-mode=space] #panel-space{display:block}
   <button data-mode="books">&#128218; Books</button>
   <button data-mode="today">&#128197; Today</button>
   <button data-mode="space">&#128640; Space</button>
+  <button data-mode="ai">&#129302; AI Chat</button>
  </div>
  <div class="row1">
   <button class="hdrbtn" id="home" title="Home" onclick="navigateTo('home')">&#x1F3E0;</button>
@@ -1354,6 +1370,20 @@ body[data-mode=space] #panel-space{display:block}
   <div class="pempty">Loading space data...</div>
  </div>
  <button class="big blue" id="spaceRefresh" style="margin-top:16px">Refresh</button>
+</div>
+
+<div class="panel" id="panel-ai">
+ <h3>&#129302; AI Assistant</h3>
+ <p class="note">Ask me anything — definitions, trivia, recipes, recommendations, or just chat. Powered by free AI.</p>
+ <div id="aiChat" class="ai-chat">
+  <div class="ai-msg bot">Hello! I'm your AI assistant. Ask me anything — I can help with definitions, trivia, recipes, recommendations, or just chat. How can I help you today?</div>
+ </div>
+ <div class="pbar2" style="position:sticky;bottom:0;background:var(--card);padding:12px 0">
+  <input id="aiInput" placeholder="Type your question here…" autocomplete="off"
+   style="flex:1;min-width:200px;padding:12px 16px;border-radius:12px;font-size:var(--fs-base);
+   border:2px solid var(--line);background:var(--card);color:var(--txt);min-height:48px">
+  <button class="big blue" id="aiSend">Send</button>
+ </div>
 </div>
 
 <div id="loader"><div><div class="spin"></div>Loading&hellip;</div></div>

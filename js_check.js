@@ -249,6 +249,7 @@ function setMode(m){
  if(m==='books'&&!BK.init)bInit();
  if(m==='today'&&!TODAY.loaded)todayLoad();
  if(m==='space'&&!SPACE.loaded)spaceLoad();
+ if(m==='ai')aiInit();
  if(m==='tv'&&S.pl!=='in')load('in');
  if(m==='radio'&&S.pl!=='rin')load('rin');
 }
@@ -267,7 +268,8 @@ var ROUTES={
  'podcasts':function(){setMode('podcasts')},
  'books':function(){setMode('books')},
  'today':function(){setMode('today')},
- 'space':function(){setMode('space')}
+ 'space':function(){setMode('space')},
+ 'ai':function(){setMode('ai')}
 };
 function routeChange(hash){
  var route=(hash||window.location.hash.slice(1)||'home').toLowerCase();
@@ -1376,6 +1378,45 @@ function spaceLoad(){
 }
 window.spaceLoad=spaceLoad;
 if($('spaceRefresh'))$('spaceRefresh').onclick=function(){SPACE.loaded=false;spaceLoad()};
+
+/* ===== AI ASSISTANT PANEL (z-ai-web-dev-sdk via mini-service) ===== */
+var AI={wired:false};
+function aiInit(){
+ if(AI.wired)return;
+ AI.wired=true;
+ if($('aiSend'))$('aiSend').onclick=aiSend;
+ if($('aiInput'))$('aiInput').addEventListener('keydown',function(e){
+  if(e.key==='Enter')aiSend()});
+}
+function aiSend(){
+ var input=$('aiInput');
+ var msg=input?input.value.trim():'';
+ if(!msg)return;
+ input.value='';
+ // Add user message to chat
+ var chat=$('aiChat');
+ chat.innerHTML+='<div class="ai-msg user">'+esc(msg)+'</div>';
+ // Add loading indicator
+ chat.innerHTML+='<div class="ai-msg bot loading" id="aiLoading">Thinking...</div>';
+ chat.scrollTop=chat.scrollHeight;
+ // Call AI service via gateway (port 3001)
+ fetch('/api/ai?p='+encodeURIComponent(msg)+'&XTransformPort=3001')
+ .then(function(r){return r.json()})
+ .then(function(d){
+  var loading=document.getElementById('aiLoading');
+  if(loading)loading.remove();
+  var response=d.response||d.error||'Sorry, I could not process that.';
+  chat.innerHTML+='<div class="ai-msg bot">'+esc(response)+'</div>';
+  chat.scrollTop=chat.scrollHeight;
+ })
+ .catch(function(){
+  var loading=document.getElementById('aiLoading');
+  if(loading)loading.remove();
+  chat.innerHTML+='<div class="ai-msg bot">Sorry, the AI service is unavailable right now. Please try again later.</div>';
+  chat.scrollTop=chat.scrollHeight;
+ });
+}
+window.aiInit=aiInit;window.aiSend=aiSend;
 
 /* ===== CHECKS / WELCOME ===== */
 function runChecks(){
