@@ -813,14 +813,22 @@ body{font-family:'Segoe UI',system-ui,Arial,sans-serif;color:var(--txt);
 html[data-theme=dark] body{background:#0a0d1a}
 header{position:sticky;top:0;background:var(--card);
  border-bottom:2px solid var(--line);z-index:9;padding:10px 18px 12px}
-#mainnav{display:flex;gap:8px;padding:2px 0 10px;border-bottom:1px dashed
- var(--line);margin-bottom:10px;overflow-x:auto}
-#mainnav button{border:2px solid var(--line);border-radius:24px;padding:10px 18px;
- background:var(--chip);color:var(--txt);cursor:pointer;font-size:var(--fs-base);
- font-weight:700;white-space:nowrap;min-height:var(--btn-h)}
-#mainnav button.on{background:linear-gradient(90deg,#fb923c,#f97316);
- color:#fff;border-color:transparent}
-#mainnav button[data-mode=radio].on{background:linear-gradient(90deg,#38bdf8,#0284c7)}
+#mainnav{display:flex;gap:6px;padding:4px 0 12px;border-bottom:2px solid
+ var(--line);margin-bottom:12px;overflow-x:auto;-webkit-overflow-scrolling:touch;
+ scrollbar-width:thin}
+#mainnav::-webkit-scrollbar{height:4px}
+#mainnav::-webkit-scrollbar-thumb{background:var(--line);border-radius:2px}
+#mainnav button{border:0;border-radius:16px;padding:10px 14px;
+ background:var(--chip);color:var(--txt);cursor:pointer;font-size:var(--fs-sm);
+ font-weight:700;white-space:nowrap;min-height:var(--btn-h);
+ transition:all .2s ease;display:flex;align-items:center;gap:4px}
+#mainnav button:hover{background:var(--hov);transform:translateY(-1px)}
+#mainnav button.on{background:linear-gradient(135deg,#fb923c,#f97316);
+ color:#fff;box-shadow:0 4px 12px rgba(249,115,22,.3)}
+#mainnav button[data-mode=radio].on{background:linear-gradient(135deg,#38bdf8,#0284c7);
+ box-shadow:0 4px 12px rgba(2,132,199,.3)}
+#mainnav button[data-mode=ai].on{background:linear-gradient(135deg,#a78bfa,#7c3aed);
+ box-shadow:0 4px 12px rgba(124,58,237,.3)}
 .row1{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:10px}
 h1{font-size:24px;font-weight:800;background:linear-gradient(90deg,var(--acc),
  var(--acc2));-webkit-background-clip:text;background-clip:text;
@@ -996,7 +1004,9 @@ body.playing #pbar{display:flex}
 #pbslp{background:var(--bg);color:var(--txt);border:1px solid var(--line);
  border-radius:10px;padding:6px;font-size:12px}
 /* ===== panels (news/markets/books) ===== */
-.panel{display:none;padding:14px 18px 120px;max-width:1200px;margin:0 auto}
+.panel{display:none;padding:16px 18px 120px;max-width:1200px;margin:0 auto;
+ animation:panelFade .3s ease}
+@keyframes panelFade{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
 body[data-mode=news] #panel-news{display:block}
 body[data-mode=books] #panel-books{display:block}
 body[data-mode=podcasts] #panel-podcasts{display:block}

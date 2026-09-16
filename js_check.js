@@ -1417,6 +1417,12 @@ function aiSend(){
  });
 }
 window.aiInit=aiInit;window.aiSend=aiSend;
+// Wire AI buttons immediately on page load (fixes timing issue where
+// clicking AI Chat tab before aiInit() was called resulted in no response)
+if($('aiSend'))$('aiSend').onclick=aiSend;
+if($('aiInput'))$('aiInput').addEventListener('keydown',function(e){
+ if(e.key==='Enter')aiSend()});
+AI.wired=true;
 
 /* ===== CHECKS / WELCOME ===== */
 function runChecks(){
