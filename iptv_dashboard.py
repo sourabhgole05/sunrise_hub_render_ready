@@ -1172,6 +1172,33 @@ body[data-mode=ai] #panel-ai{display:block}
  .ai-msg{max-width:95%;font-size:var(--fs-sm)}
  .ai-chat{max-height:50vh}
 }
+/* ===== App-like bottom navigation bar ===== */
+#bottomnav{position:fixed;bottom:0;left:0;right:0;z-index:90;
+ display:flex;justify-content:space-around;align-items:center;
+ background:var(--card);border-top:2px solid var(--line);
+ box-shadow:0 -4px 20px rgba(0,0,0,.1);
+ padding:6px 4px calc(6px + env(safe-area-inset-bottom));
+ max-width:600px;margin:0 auto}
+#bottomnav button{border:0;background:none;color:var(--mut);
+ cursor:pointer;display:flex;flex-direction:column;align-items:center;
+ gap:2px;padding:6px 8px;border-radius:12px;transition:all .2s ease;
+ min-width:48px;min-height:52px;flex:1}
+#bottomnav button .bn-icon{font-size:22px;line-height:1}
+#bottomnav button .bn-label{font-size:10px;font-weight:700;text-transform:uppercase;
+ letter-spacing:.02em}
+#bottomnav button:hover{color:var(--acc);background:var(--hov)}
+#bottomnav button.active{color:var(--acc);background:rgba(249,115,22,.1)}
+#bottomnav button.active .bn-icon{transform:scale(1.15)}
+/* Hide top mainnav on mobile, show bottomnav */
+@media(max-width:760px){
+ #mainnav{display:none!important}
+ .panel{padding-bottom:90px!important}
+ body{padding-bottom:0}
+}
+/* Hide bottomnav on desktop, keep top mainnav */
+@media(min-width:761px){
+ #bottomnav{display:none}
+}
 /* reader + bookview */
 .reader h3{line-height:1.35}
 #rvbody{font-size:15px;line-height:1.75;color:var(--txt);white-space:pre-wrap;
@@ -1398,6 +1425,17 @@ body[data-mode=ai] #panel-ai{display:block}
 
 <div id="loader"><div><div class="spin"></div>Loading&hellip;</div></div>
 <div id="toast"></div>
+
+<!-- App-like bottom navigation bar (mobile-first) -->
+<nav id="bottomnav">
+  <button data-mode="tv" class="active"><span class="bn-icon">&#128250;</span><span class="bn-label">TV</span></button>
+  <button data-mode="radio"><span class="bn-icon">&#127897;</span><span class="bn-label">Radio</span></button>
+  <button data-mode="news"><span class="bn-icon">&#128240;</span><span class="bn-label">News</span></button>
+  <button data-mode="books"><span class="bn-icon">&#128218;</span><span class="bn-label">Books</span></button>
+  <button data-mode="today"><span class="bn-icon">&#128197;</span><span class="bn-label">Today</span></button>
+  <button data-mode="space"><span class="bn-icon">&#128640;</span><span class="bn-label">Space</span></button>
+  <button data-mode="ai"><span class="bn-icon">&#129302;</span><span class="bn-label">AI</span></button>
+</nav>
 
 <div id="pbar">
  <img id="pblogo" alt="">
@@ -3375,6 +3413,47 @@ class Handler(BaseHTTPRequestHandler):
                 out["people"] = {"error": str(e)[:80]}
             self.send(200, json.dumps(out, ensure_ascii=True), "application/json",
                       [("Cache-Control", "no-store, max-age=0")])
+
+        # ===== AI CHAT (calls z-ai CLI via subprocess — no separate service needed) =====
+        elif u.path == "/api/ai":
+            prompt = qs.get("p", [""])[0].strip()[:500]
+            if not prompt:
+                self.send(200, '{"error":"no prompt"}', "application/json")
+                return
+            try:
+                import subprocess as _sp
+                result = _sp.run(
+                    ["z-ai", "chat", "-p", prompt],
+                    capture_output=True, text=True, timeout=30
+                )
+                # z-ai CLI outputs JSON; extract the content field
+                raw = result.stdout
+                # Find the JSON block in the output
+                json_start = raw.find("{")
+                if json_start >= 0:
+                    try:
+                        j = json.loads(raw[json_start:])
+                        content = (j.get("choices") or [{}])[0].get("message", {}).get("content", "")
+                        if content:
+                            self.send(200, json.dumps({"response": content}, ensure_ascii=True),
+                                      "application/json",
+                                      [("Cache-Control", "no-store, max-age=0")])
+                            return
+                    except Exception:
+                        pass
+                # Fallback: return raw output
+                self.send(200, json.dumps({"response": raw[:500] or "No response from AI."},
+                                          ensure_ascii=True), "application/json",
+                          [("Cache-Control", "no-store, max-age=0")])
+            except _sp.TimeoutExpired:
+                self.send(200, json.dumps({"error": "AI timed out. Please try a shorter question."},
+                                          ensure_ascii=True), "application/json")
+            except FileNotFoundError:
+                self.send(200, json.dumps({"error": "AI service not available on this server."},
+                                          ensure_ascii=True), "application/json")
+            except Exception as e:
+                self.send(200, json.dumps({"error": str(e)[:100]},
+                                          ensure_ascii=True), "application/json")
 
         elif u.path == "/api/books":
             qstr = qs.get("q", [""])[0].strip()[:60]

@@ -1400,7 +1400,7 @@ function aiSend(){
  chat.innerHTML+='<div class="ai-msg bot loading" id="aiLoading">Thinking...</div>';
  chat.scrollTop=chat.scrollHeight;
  // Call AI service via gateway (port 3001)
- fetch('/api/ai?p='+encodeURIComponent(msg)+'&XTransformPort=3001')
+ fetch('/api/ai?p='+encodeURIComponent(msg))
  .then(function(r){return r.json()})
  .then(function(d){
   var loading=document.getElementById('aiLoading');
@@ -1482,6 +1482,20 @@ function load(pl){var token=++S.loadToken;
 /* ===== EVENTS ===== */
 $('mainnav').onclick=function(e){
  var b=e.target.closest('button');if(b)setMode(b.dataset.mode)};
+// Wire bottom nav (mobile app-style navigation)
+if($('bottomnav'))$('bottomnav').onclick=function(e){
+ var b=e.target.closest('button');if(b){
+  setMode(b.dataset.mode);
+  // Update active state
+  document.querySelectorAll('#bottomnav button').forEach(function(btn){
+   btn.classList.toggle('active',btn===b)});
+ }};
+// Update bottom nav active state when mode changes
+var _origSetMode=setMode;
+setMode=function(m){
+ _origSetMode(m);
+ document.querySelectorAll('#bottomnav button').forEach(function(btn){
+  btn.classList.toggle('active',btn.dataset.mode===m)})};
 $('tabs').onclick=function(e){if(e.target.dataset.pl)load(e.target.dataset.pl)};
 $('chips').onclick=function(e){var b=e.target.closest('button');if(!b)return;
  S.cat=b.dataset.c;buildChips();render(true)};
